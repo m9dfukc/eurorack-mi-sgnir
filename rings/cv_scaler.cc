@@ -83,6 +83,7 @@ void CvScaler::Init(CalibrationData* calibration_data) {
   
   inhibit_strum_ = 0;
   pot_transpose_ = 0.0f;
+  octave_ = 0;
   fm_cv_ = 0.0f;
   
   normalization_probe_enabled_ = true;
@@ -223,7 +224,13 @@ void CvScaler::Read(
   
   pot_transpose_ = performance_state->tonic - 12.0f;
   if (state.frequency_locked) {
-    performance_state->tonic = 12.0f + state.locked_transpose;
+    // Alt function of the FREQUENCY pot: it keeps its scale but snaps to
+    // whole octaves of the locked pitch (no jump at lock time).
+    float octave = (pot_transpose_ - state.locked_transpose) / 12.0f;
+    hysteresis = octave - octave_ > 0.0f ? -0.1f : +0.1f;
+    octave_ = static_cast<int32_t>(floorf(octave + hysteresis + 0.5f));
+    performance_state->tonic = 12.0f + state.locked_transpose + \
+        12.0f * static_cast<float>(octave_);
   }
   
   // Hysteresis on chord.

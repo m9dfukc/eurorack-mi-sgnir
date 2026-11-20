@@ -227,6 +227,7 @@ class CvScaler {
   float pending_offset_[ADC_CHANNEL_NUM_OFFSETS];
   float cv_low_;
   int32_t chord_;
+  int32_t octave_;
   
   bool normalization_probe_enabled_;
   bool normalization_probe_forced_state_;

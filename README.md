@@ -49,9 +49,12 @@ Not yet tested on hardware.
 
 Hold **both buttons for more than 0.2 s**: both LEDs blink **red** (frequency will be locked)
 or **green** (frequency will be unlocked). The change happens when you release the buttons.
-While locked, the FREQUENCY knob no longer changes the pitch; V/OCT, FM input and FM
-attenuverter work as usual. The lock and the locked pitch are saved and survive a power cycle.
-Behavior taken from the [lylepmills alt firmware](https://github.com/lylepmills/eurorack).
+While locked, V/OCT, FM input and FM attenuverter work as usual, and the FREQUENCY knob becomes
+an **octave switch**: it keeps its usual scale (one octave per fifth of its travel) but snaps to
+whole octaves of the locked pitch. Locking never changes the pitch; turn the knob about a fifth
+of its travel to go up or down one octave. The lock and the locked pitch are saved and survive
+a power cycle. Idea taken from the [lylepmills alt firmware](https://github.com/lylepmills/eurorack),
+whose octave switch is absolute (7 fixed steps) instead.
 
 ### Calibration: hold both buttons for 6 seconds
 
@@ -86,8 +89,8 @@ Developed in the (separate) workbench repo `eurorack-mi-rings`:
 
 1. **Schliere** — a chain of 61 second-order allpass filters with feedback (inspired by the
    Smoothie Audio *Smear*), as an additional mode next to the resonator models.
-2. **Frequency knob alt functionality** (octave switch while locked) from the
-   [lylepmills fork](https://github.com/lylepmills/eurorack) (new chord tables may follow).
+2. New chord tables from the [lylepmills fork](https://github.com/lylepmills/eurorack)
+   (optional).
 
 ## Credits
 
