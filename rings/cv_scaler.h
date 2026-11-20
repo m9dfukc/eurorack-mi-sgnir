@@ -95,12 +95,20 @@ class CvScaler {
   ~CvScaler() { }
   
   void Init(CalibrationData* calibration_data);
-  void Read(Patch* patch, PerformanceState* performance_state);
+  void Read(
+      Patch* patch,
+      PerformanceState* performance_state,
+      const State& state);
 
   void DetectAudioNormalization(Codec::Frame* in, size_t size);
 
   inline bool ready_for_calibration() const {
     return true;
+  }
+  
+  // Transpose set by the FREQUENCY pot, ignoring frequency locking.
+  inline float pot_transpose() const {
+    return pot_transpose_;
   }
   
   inline bool easter_egg() const {
@@ -207,6 +215,7 @@ class CvScaler {
   
   float adc_lp_[ADC_CHANNEL_LAST];
   float transpose_;
+  float pot_transpose_;
   float fm_cv_;
   float cv_c1_;
   float cv_low_;

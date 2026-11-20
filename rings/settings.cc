@@ -47,7 +47,12 @@ void Settings::Init() {
     data_.state.easter_egg = 0;
     data_.state.color_blind = 0;
     data_.calibration_data.normalization_detection_threshold = 0.75f;
+    InitStateExtension();
     freshly_baked_ = true;
+    Save();
+  } else if (data_.state.extension_id != kStateExtensionId) {
+    // Settings saved by the stock firmware: keep calibration and state.
+    InitStateExtension();
     Save();
   }
   if (data_.calibration_data.normalization_detection_threshold < 0.7f ||
@@ -56,6 +61,21 @@ void Settings::Init() {
   }
   CONSTRAIN(data_.state.polyphony, 1, 4);
   CONSTRAIN(data_.state.model, 0, 5);
+  if (data_.state.frequency_locked > 1 ||
+      !(data_.state.locked_transpose >= -1.0f &&
+        data_.state.locked_transpose <= 61.0f)) {
+    data_.state.frequency_locked = 0;
+    data_.state.locked_transpose = 0.0f;
+  }
+}
+
+void Settings::InitStateExtension() {
+  data_.state.extension_id = kStateExtensionId;
+  data_.state.locked_transpose = 0.0f;
+  data_.state.frequency_locked = 0;
+  for (size_t i = 0; i < sizeof(data_.state.reserved); ++i) {
+    data_.state.reserved[i] = 0;
+  }
 }
 
 void Settings::Save() {

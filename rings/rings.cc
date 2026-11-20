@@ -93,7 +93,7 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
   Patch patch;
   
   cv_scaler.DetectAudioNormalization(input, size);
-  cv_scaler.Read(&patch, &performance_state);
+  cv_scaler.Read(&patch, &performance_state, settings.state());
   
   if (settings.state().easter_egg) {
     for (size_t i = 0; i < size; ++i) {

@@ -35,6 +35,10 @@
 
 namespace rings {
 
+// Marks a valid sgnir extension block in the State struct. Settings saved by
+// the stock firmware carry arbitrary bytes there (formerly padding).
+const uint32_t kStateExtensionId = 0x53474e31;  // 'SGN1'
+
 struct CalibrationData {
   float pitch_offset;
   float pitch_scale;
@@ -48,13 +52,24 @@ struct State {
   uint8_t model;
   uint8_t easter_egg;
   uint8_t color_blind;
+  
+  // sgnir extensions, placed in the former padding so that the layout of the
+  // stock fields (and the calibration data) is unchanged.
+  uint32_t extension_id;
+  float locked_transpose;
+  uint8_t frequency_locked;
+  uint8_t reserved[3];
 };
 
 struct SettingsData {
-  CalibrationData calibration_data; // 40 bytes
-  State state;  // 4 bytes
-  uint8_t padding[20];
+  CalibrationData calibration_data; // 36 bytes
+  State state;  // 16 bytes
+  uint8_t padding[8];
 };
+
+// The storage layer rejects blocks of a different size: changing it would
+// discard the calibration data saved by the stock firmware.
+static_assert(sizeof(SettingsData) == 60, "SettingsData must stay 60 bytes");
 
 class Settings {
  public:
@@ -72,6 +87,15 @@ class Settings {
     data_.state.easter_egg = !data_.state.easter_egg;
   }
   
+  inline void LockFrequency(float transpose) {
+    data_.state.locked_transpose = transpose;
+    data_.state.frequency_locked = 1;
+  }
+  
+  inline void UnlockFrequency() {
+    data_.state.frequency_locked = 0;
+  }
+  
   inline State* mutable_state() {
     return &data_.state;
   }
@@ -87,6 +111,8 @@ class Settings {
   }
   
  private:
+  void InitStateExtension();
+  
   bool freshly_baked_;
   SettingsData data_;
   uint16_t version_token_;

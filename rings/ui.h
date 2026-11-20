@@ -45,6 +45,7 @@ class StringSynthPart;
 
 enum UiMode {
   UI_MODE_NORMAL,
+  UI_MODE_DISPLAY_FREQUENCY_LOCKING,
   UI_MODE_CALIBRATION_C1,
   UI_MODE_CALIBRATION_C3,
   UI_MODE_CALIBRATION_LOW,
@@ -100,6 +101,7 @@ class Ui {
   void CalibrateLow();
   void CalibrateHigh();
   void SaveState();
+  void ToggleFrequencyLocking();
   void AnimateEasterEggLeds();
 
   stmlib::EventQueue<16> queue_;

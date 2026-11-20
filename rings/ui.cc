@@ -39,6 +39,9 @@
 namespace rings {
 
 const int32_t kLongPressDuration = 3000;
+const int32_t kMediumPressDuration = 200;
+// Both switches must be held this long to enter calibration.
+const int32_t kCalibrationPressDuration = 6000;
 
 using namespace std;
 using namespace stmlib;
@@ -81,6 +84,15 @@ void Ui::SaveState() {
   settings_->Save();
 }
 
+void Ui::ToggleFrequencyLocking() {
+  if (settings_->state().frequency_locked) {
+    settings_->UnlockFrequency();
+  } else {
+    settings_->LockFrequency(cv_scaler_->pot_transpose());
+  }
+  SaveState();
+}
+
 void Ui::AnimateEasterEggLeds() {
   mode_ = settings_->state().easter_egg
       ? UI_MODE_EASTER_EGG_INTRO
@@ -99,9 +111,16 @@ void Ui::Poll() {
     }
     if (switches_.pressed(i) && press_time_[i] != 0) {
       int32_t pressed_time = system_clock.milliseconds() - press_time_[i];
-      if (pressed_time > kLongPressDuration) {
+      int32_t long_press_duration = switches_.pressed(1 - i)
+          ? kCalibrationPressDuration
+          : kLongPressDuration;
+      if (pressed_time > long_press_duration) {
         queue_.AddEvent(CONTROL_SWITCH, i, pressed_time);
         press_time_[i] = 0;
+      } else if (pressed_time > kMediumPressDuration &&
+                 mode_ == UI_MODE_NORMAL &&
+                 switches_.pressed(1 - i)) {
+        mode_ = UI_MODE_DISPLAY_FREQUENCY_LOCKING;
       }
     }
     if (switches_.released(i) && press_time_[i] != 0) {
@@ -194,6 +213,15 @@ void Ui::Poll() {
       leds_.set(1, false, slow_blink);
       break;
     
+    case UI_MODE_DISPLAY_FREQUENCY_LOCKING:
+      // Preview the state applied on release: red = lock, green = unlock.
+      {
+        bool locked = settings_->state().frequency_locked;
+        leds_.set(0, !locked && blink, locked && blink);
+        leds_.set(1, !locked && blink, locked && blink);
+      }
+      break;
+    
     case UI_MODE_EASTER_EGG_INTRO:
       {
         uint8_t pwm_counter = system_clock.milliseconds() & 15;
@@ -241,11 +269,25 @@ void Ui::OnSwitchPressed(const Event& e) {
 }
 
 void Ui::OnSwitchReleased(const Event& e) {
-  // Check if the other switch is still pressed.
+  // Both switches held for more than kMediumPressDuration: the first release
+  // toggles frequency locking, holding on enters calibration.
+  if (mode_ == UI_MODE_DISPLAY_FREQUENCY_LOCKING) {
+    if (e.data >= kCalibrationPressDuration) {
+      StartCalibration();
+    } else {
+      ToggleFrequencyLocking();
+      mode_ = UI_MODE_NORMAL;
+    }
+    press_time_[0] = press_time_[1] = 0;
+    return;
+  }
+  
+  // Check if the other switch is still pressed. A short press of both
+  // switches is ignored, so that calibration is only entered by holding them.
   if (switches_.pressed(1 - e.control_id)) {
     if (mode_ == UI_MODE_CALIBRATION_C1) {
       StartNormalizationCalibration();
-    } else {
+    } else if (e.data >= kCalibrationPressDuration) {
       StartCalibration();
     }
     press_time_[0] = press_time_[1] = 0;

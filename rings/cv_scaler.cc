@@ -78,6 +78,7 @@ void CvScaler::Init(CalibrationData* calibration_data) {
   normalization_detector_v_oct_.Init(0.01f, 0.5f);
   
   inhibit_strum_ = 0;
+  pot_transpose_ = 0.0f;
   fm_cv_ = 0.0f;
   
   normalization_probe_enabled_ = true;
@@ -139,7 +140,10 @@ void CvScaler::DetectNormalization() {
     destination = value; \
   }
 
-void CvScaler::Read(Patch* patch, PerformanceState* performance_state) {
+void CvScaler::Read(
+    Patch* patch,
+    PerformanceState* performance_state,
+    const State& state) {
   // Process all CVs / pots.
   for (size_t i = 0; i < ADC_CHANNEL_LAST; ++i) {
     const ChannelSettings& settings = channel_settings_[i];
@@ -211,6 +215,11 @@ void CvScaler::Read(Patch* patch, PerformanceState* performance_state) {
     // Remove quantization when nothing is plugged in the V/OCT input.
     performance_state->note = 0.0f;
     performance_state->tonic = 12.0f + transpose;
+  }
+  
+  pot_transpose_ = performance_state->tonic - 12.0f;
+  if (state.frequency_locked) {
+    performance_state->tonic = 12.0f + state.locked_transpose;
   }
   
   // Hysteresis on chord.
