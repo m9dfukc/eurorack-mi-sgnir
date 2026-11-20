@@ -101,6 +101,14 @@ jobs:
           name: ${{ env.NAME }}
           path: dist/
 
+      - name: Upload ELF and map (for debugging, not part of the release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}-elf
+          path: |
+            build/rings/rings.elf
+            build/rings/rings.map
+
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/')
         env:
