@@ -7,8 +7,9 @@
 // responses and checked against the textbook allpass and the Smear manual.
 //
 // Build and run from the repository root:
-//   c++ -std=c++11 -O2 -DTEST -I. -o schliere_test \
+//   c++ -std=c++11 -O2 -DTEST -I. -o schliere_test
 //       rings/test/schliere_test.cc rings/dsp/schliere.cc && ./schliere_test
+// (one command line)
 
 #include <cmath>
 #include <complex>
