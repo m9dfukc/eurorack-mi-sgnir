@@ -1,0 +1,108 @@
+# Builds the firmware and publishes a GitHub release when a version tag is
+# pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`).
+#
+# Release assets: sgnir-<tag>.wav (audio update, the normal way to install),
+# sgnir-<tag>.bin (raw image for SWD), SHA256SUMS.txt. Release notes: build
+# info + docs/FLASHING.md.
+#
+# Manual runs (workflow_dispatch) build and upload the files as a workflow
+# artifact only, without creating a release.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ARM_TOOLCHAIN: arm-gnu-toolchain-12.2.rel1-x86_64-arm-none-eabi
+  ARM_TOOLCHAIN_URL: https://developer.arm.com/-/media/Files/downloads/gnu/12.2.rel1/binrel
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Arm GNU Toolchain
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/arm-gnu-toolchain
+          key: ${{ env.ARM_TOOLCHAIN }}
+
+      - name: Install Arm GNU Toolchain 12.2.Rel1 (checksum-verified)
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$ARM_TOOLCHAIN_URL/$ARM_TOOLCHAIN.tar.xz"
+          curl -fsSLO "$ARM_TOOLCHAIN_URL/$ARM_TOOLCHAIN.tar.xz.sha256asc"
+          sha256sum -c "$ARM_TOOLCHAIN.tar.xz.sha256asc"
+          mkdir -p ~/arm-gnu-toolchain
+          tar -xJf "$ARM_TOOLCHAIN.tar.xz" --strip-components=1 -C ~/arm-gnu-toolchain
+
+      - name: Toolchain version
+        run: ~/arm-gnu-toolchain/bin/arm-none-eabi-gcc --version | head -1
+
+      - name: Host tests (Schliere DSP)
+        run: |
+          c++ -std=c++11 -O2 -Wall -Werror -DTEST -I. -o "$RUNNER_TEMP/schliere_test" \
+              rings/test/schliere_test.cc rings/dsp/schliere.cc
+          "$RUNNER_TEMP/schliere_test"
+
+      - name: Build firmware
+        run: |
+          make -f rings/makefile TOOLCHAIN_PATH="$HOME/arm-gnu-toolchain/" \
+              CPPFLAGS="-fno-exceptions -fno-rtti -std=gnu++11 -Wno-deprecated" bin
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Encode the audio update WAV and verify it
+        run: |
+          pip install numpy
+          NAME="sgnir-${GITHUB_REF_NAME//\//-}"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          mkdir dist
+          cp build/rings/rings.bin "dist/$NAME.bin"
+          python tools/qpsk_encoder.py -t stm32f4 -s 48000 -b 12000 -c 6000 -p 256 \
+              -o "dist/$NAME.wav" "dist/$NAME.bin"
+          # Round trip: decode the WAV, the payload must start with the .bin.
+          python tools/qpsk_decoder.py "dist/$NAME.wav" -o "$RUNNER_TEMP/roundtrip.bin"
+          SIZE=$(stat -c %s "dist/$NAME.bin")
+          head -c "$SIZE" "$RUNNER_TEMP/roundtrip.bin" | cmp - "dist/$NAME.bin"
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Release notes
+        run: |
+          {
+            echo "Firmware for the Mutable Instruments **Rings** module (not affiliated with Mutable Instruments)."
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Toolchain: Arm GNU 12.2.Rel1"
+            echo "- Install: play \`$NAME.wav\` into the IN jack — see below. The \`.bin\` is only for SWD."
+            echo "- Controls and changes: see the [README](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/README.md)."
+            echo
+            cat docs/FLASHING.md
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: dist/
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "sgnir $GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/notes.md"
