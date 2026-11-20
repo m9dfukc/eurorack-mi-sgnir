@@ -129,9 +129,12 @@ class CvScaler {
     cv_c1_ = adc_.float_value(ADC_CHANNEL_CV_V_OCT);
   }
 
+  // The offsets are only applied when CalibrateC3() succeeds, so that an
+  // aborted calibration cannot leave them behind to be saved by the next
+  // settings write.
   inline void CalibrateOffsets() {
     for (size_t i = 0; i < ADC_CHANNEL_NUM_OFFSETS; ++i) {
-      calibration_data_->offset[i] = adc_.float_value(i);
+      pending_offset_[i] = adc_.float_value(i);
     }
   }
   
@@ -143,6 +146,9 @@ class CvScaler {
       calibration_data_->pitch_scale = 24.0f / (c3 - c1);
       calibration_data_->pitch_offset = 12.0f - \
           calibration_data_->pitch_scale * c1;
+      for (size_t i = 0; i < ADC_CHANNEL_NUM_OFFSETS; ++i) {
+        calibration_data_->offset[i] = pending_offset_[i];
+      }
       return true;
     }
     normalization_probe_enabled_ = true;
@@ -218,6 +224,7 @@ class CvScaler {
   float pot_transpose_;
   float fm_cv_;
   float cv_c1_;
+  float pending_offset_[ADC_CHANNEL_NUM_OFFSETS];
   float cv_low_;
   int32_t chord_;
   

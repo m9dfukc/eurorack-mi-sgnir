@@ -71,6 +71,10 @@ void CvScaler::Init(CalibrationData* calibration_data) {
   transpose_ = 0.0f;
   
   fill(&adc_lp_[0], &adc_lp_[ADC_CHANNEL_LAST], 0.0f);
+  copy(
+      &calibration_data_->offset[0],
+      &calibration_data_->offset[ADC_CHANNEL_NUM_OFFSETS],
+      &pending_offset_[0]);
   
   normalization_probe_.Init();
   normalization_detector_exciter_.Init(0.01f, 0.5f);
