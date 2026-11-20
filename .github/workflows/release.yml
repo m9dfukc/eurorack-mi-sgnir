@@ -56,6 +56,10 @@ jobs:
 
       - name: Build firmware
         run: |
+          # The resources are checked in. After a fresh checkout their files
+          # may look older than resources/*.py, and make would try to
+          # regenerate them with the Python 2 resource compiler.
+          touch rings/resources.cc rings/resources.h
           make -f rings/makefile TOOLCHAIN_PATH="$HOME/arm-gnu-toolchain/" \
               CPPFLAGS="-fno-exceptions -fno-rtti -std=gnu++11 -Wno-deprecated" bin
 

@@ -46,6 +46,11 @@ base tree: 84 016 bytes, SHA-256
 `b481538e5a34d41668fa47efa2437e7de5d6f9236b38c13f30ed2f20823806ca` (not bit-reproducibility
 tested across machines).
 
+After a fresh clone, `make` may try to regenerate `rings/resources.cc` with the Python 2 resource
+compiler (the checked-in file looks older than `rings/resources/*.py`) and fail with an `xrange`
+error. The checked-in resources are correct: run `touch rings/resources.cc rings/resources.h` once
+and build again.
+
 The `size` make target pipes through `figlet`/`cowsay` — install them or ignore the error.
 
 The firmware WAV for the audio bootloader is made with the Python 3 port of the original
