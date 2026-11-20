@@ -42,6 +42,13 @@
 
 #include "stmlib/stmlib.h"
 
+// Optional placement of the per-sample code, e.g.
+// __attribute__((section(".ramtext"), long_call)) for RAM.
+// Measured on the module (diag5): running from RAM is 18 % SLOWER than from
+// flash with prefetch (instruction fetches and data share the S-bus), so
+// this stays empty. Kept as a hook for experiments.
+#define SCHLIERE_RAM_CODE
+
 namespace rings {
 
 const size_t kSchliereStages = 61;
@@ -79,7 +86,7 @@ struct SchliereParameters {
 class SchliereHalfband {
  public:
   void Init();
-  float Branch(float x, int32_t first);
+  SCHLIERE_RAM_CODE float Branch(float x, int32_t first);
 
  private:
   static const int32_t kNumCoefficients = 6;
@@ -93,7 +100,7 @@ class Schliere {
   ~Schliere() { }
 
   void Init(SchliereVariant variant);
-  void Process(
+  SCHLIERE_RAM_CODE void Process(
       const SchliereParameters& parameters,
       const float* in,
       float* out_l,
@@ -102,6 +109,15 @@ class Schliere {
 
   // True while the limiter in the feedback loop works (held for 0.3 s).
   inline bool limiter_active() const { return limiter_blocks_ > 0; }
+
+  // Chain input at 96 kHz (variants S, O). Switchable at runtime for CPU
+  // measurements on the module.
+  inline void set_oversampled_feedback(bool on) {
+    switches_.oversampled_feedback = on;
+  }
+  inline bool oversampled_feedback() const {
+    return switches_.oversampled_feedback;
+  }
 
   // Detent 1..7 the tap knob rests on (with hysteresis), 0 between detents.
   // Follows the knob only, not the CV.
@@ -120,10 +136,10 @@ class Schliere {
   void Reset();
   void ComputeCoefficients(float knob_f, float knob_q, float octaves,
                            float* g, float* k) const;
-  float FeedbackAmount(float knob_plus_cv) const;
-  float ChainInput(float in, float cv);
-  float ChainInputOversampled(float in, float cv);
-  float Excitation();
+  SCHLIERE_RAM_CODE float FeedbackAmount(float knob_plus_cv) const;
+  SCHLIERE_RAM_CODE float ChainInput(float in, float cv);
+  SCHLIERE_RAM_CODE float ChainInputOversampled(float in, float cv);
+  SCHLIERE_RAM_CODE float Excitation();
   void UpdateTapDetent();
   bool Broken() const;
 
@@ -149,8 +165,9 @@ class Schliere {
   float feedback_lp_[2];
 
   // Chain input at 96 kHz.
-  SchliereHalfband up_in_, up_cv_, up_loop_, down_;
+  SchliereHalfband up_in_, up_loop_, down_;
   float down_odd_;
+  float cv_previous_;
 
   // Excitation.
   float burst_level_;

@@ -26,6 +26,12 @@
 
 #include "rings/dsp/schliere.h"
 
+// The Rings makefile builds with -fno-move-loop-invariants; for the chain
+// loop that rematerializes constants in every stage.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize("move-loop-invariants")
+#endif
+
 #include <cmath>
 
 #include "stmlib/dsp/dsp.h"
@@ -66,6 +72,12 @@ const float kBurstLowpassHz = 4000.0f;
 const uint8_t kTapsL[kSchliereTaps] = { 1, 9, 17, 25, 33, 41, 49 };
 const uint8_t kTapsR[kSchliereTaps] = { 1, 11, 21, 31, 41, 51, 61 };
 
+// All nodes read by the taps (union of L, R and the chain end), ascending.
+const size_t kNumTappedNodes = 12;
+const uint8_t kTappedNodes[kNumTappedNodes] = {
+  1, 9, 11, 17, 21, 25, 31, 33, 41, 49, 51, 61
+};
+
 // Halfband coefficients (Valenzuela/Constantinides, elliptic, transition
 // 0.045): flat to 20 kHz, at least 77 dB stopband from 28 kHz.
 const float kHalfbandCoefficients[6] = {
@@ -103,12 +115,12 @@ inline float LowpassCoefficient(float hz, float sample_rate) {
 }
 
 // One stage: trapezoidal state variable filter, allpass = x - c * bandpass.
-inline float Stage(float x, float* s, float a1, float a2, float g, float c) {
-  float v3 = x - s[1];
-  float v1 = a1 * s[0] + a2 * v3;
-  float v2 = s[1] + g * v1;
+// g2 = 2 g: the second integrator update 2 (s1 + g v1) - s1 is folded into
+// s1 + 2 g v1 (algebraically identical, one operation less).
+inline float Stage(float x, float* s, float a1, float a2, float g2, float c) {
+  float v1 = a1 * s[0] + a2 * (x - s[1]);
   s[0] = 2.0f * v1 - s[0];
-  s[1] = 2.0f * v2 - s[1];
+  s[1] += g2 * v1;
   return x - c * v1;
 }
 
@@ -144,7 +156,7 @@ void SchliereHalfband::Init() {
   }
 }
 
-float SchliereHalfband::Branch(float x, int32_t first) {
+SCHLIERE_RAM_CODE float SchliereHalfband::Branch(float x, int32_t first) {
   for (int32_t i = first; i < kNumCoefficients; i += 2) {
     float y = kHalfbandCoefficients[i] * (x - y_[i]) + x_[i];
     x_[i] = x;
@@ -218,10 +230,10 @@ void Schliere::Reset() {
     node_[i] = 0.0f;
   }
   up_in_.Init();
-  up_cv_.Init();
   up_loop_.Init();
   down_.Init();
   down_odd_ = 0.0f;
+  cv_previous_ = 0.0f;
   loop_lp_ = 0.0f;
   loop_state_ = 0.0f;
   loop_peak_ = 0.0f;
@@ -240,14 +252,14 @@ void Schliere::ComputeCoefficients(
   *k = expf(-LnQ(knob_q));
 }
 
-float Schliere::FeedbackAmount(float knob_plus_cv) const {
+SCHLIERE_RAM_CODE float Schliere::FeedbackAmount(float knob_plus_cv) const {
   return kFeedbackMax * (switches_.hard_feedback_limit
       ? Clamp(knob_plus_cv, -1.0f, 1.0f)
       : Soft(knob_plus_cv, kFeedbackKnee, 1.0f));
 }
 
 // Chain input at 48 kHz: input and feedback loop.
-float Schliere::ChainInput(float in, float cv) {
+SCHLIERE_RAM_CODE float Schliere::ChainInput(float in, float cv) {
   float fb = FeedbackAmount(feedback_ + cv);
   if (feedback_g_ > 0.0f) {
     fb = Lowpass(Lowpass(fb, &feedback_lp_[0], feedback_g_),
@@ -260,9 +272,13 @@ float Schliere::ChainInput(float in, float cv) {
 // Chain input at 96 kHz: input, CV and loop are upsampled, the feedback
 // product is formed there, then the result is decimated. Sum frequencies
 // above 24 kHz then fall into the decimation filter instead of folding back.
-float Schliere::ChainInputOversampled(float in, float cv) {
+SCHLIERE_RAM_CODE float Schliere::ChainInputOversampled(float in, float cv) {
   float in_2x[2] = { up_in_.Branch(in, 0), up_in_.Branch(in, 1) };
-  float cv_2x[2] = { up_cv_.Branch(cv, 0), up_cv_.Branch(cv, 1) };
+  // The CV only moves at block rate (ramped): linear interpolation is enough
+  // instead of a third halfband. (The OWL version upsampled an audio-rate
+  // CV here.)
+  float cv_2x[2] = { 0.5f * (cv_previous_ + cv), cv };
+  cv_previous_ = cv;
   float loop_2x[2] = {
     up_loop_.Branch(loop_state_, 0), up_loop_.Branch(loop_state_, 1)
   };
@@ -278,7 +294,7 @@ float Schliere::ChainInputOversampled(float in, float cv) {
   return y;
 }
 
-float Schliere::Excitation() {
+SCHLIERE_RAM_CODE float Schliere::Excitation() {
   float e = 0.0f;
   if (impulse_pending_) {
     e += kExciteLevel;
@@ -313,7 +329,7 @@ bool Schliere::Broken() const {
       IsBroken(loop_lp_);
 }
 
-void Schliere::Process(
+SCHLIERE_RAM_CODE void Schliere::Process(
     const SchliereParameters& p,
     const float* in,
     float* out_l,
@@ -336,6 +352,7 @@ void Schliere::Process(
     tap_cv_ = p.tap_cv;
     feedback_cv_ = p.feedback_cv;
     feedback_cv_lp_[0] = feedback_cv_lp_[1] = p.feedback_cv;
+    cv_previous_ = p.feedback_cv;
     feedback_lp_[0] = feedback_lp_[1] = FeedbackAmount(p.feedback);
   }
 
@@ -354,6 +371,24 @@ void Schliere::Process(
   g_step_ = (g_target - g_) * inverse_size;
   k_step_ = (k_target - k_) * inverse_size;
 
+  // The stage coefficients a1 = 1 / (1 + g (g + k)), a2 = g a1 are ramped
+  // linearly over the block instead of dividing per sample. Exact at the
+  // block boundaries; identical to the per-sample form when nothing moves.
+  float g_end = g_ + g_step_ * static_cast<float>(size);
+  float k_end = k_ + k_step_ * static_cast<float>(size);
+  float a1_start = 1.0f / (1.0f + (g_ + g_step_) * ((g_ + g_step_) +
+                                                    (k_ + k_step_)));
+  float a1_end = 1.0f / (1.0f + g_end * (g_end + k_end));
+  float a2_start = (g_ + g_step_) * a1_start;
+  float a2_end = g_end * a1_end;
+  float a1 = a1_start;
+  float a2 = a2_start;
+  float a1_step = 0.0f, a2_step = 0.0f;
+  if (size > 1) {
+    a1_step = (a1_end - a1_start) / static_cast<float>(size - 1);
+    a2_step = (a2_end - a2_start) / static_cast<float>(size - 1);
+  }
+
   // CVs arrive once per block: ramp them over the block.
   float tap_cv_step = (p.tap_cv - tap_cv_) * inverse_size;
   float feedback_cv_step = (p.feedback_cv - feedback_cv_) * inverse_size;
@@ -370,9 +405,7 @@ void Schliere::Process(
   for (size_t i = 0; i < size; ++i) {
     g_ += g_step_;
     k_ += k_step_;
-    float g = g_;  // local copy: keeps the stage loop free of reloads
-    float a1 = 1.0f / (1.0f + g * (g + k_));
-    float a2 = g * a1;
+    float g2 = 2.0f * g_;  // local copy: keeps the stage loop free of reloads
     float c = 2.0f * k_;
 
     tap_cv_ += tap_cv_step;
@@ -390,13 +423,19 @@ void Schliere::Process(
         : ChainInput(in[i], feedback_cv);
     x += Excitation();
 
-    // The chain.
+    // The chain. Only the nodes read by the taps are stored.
     node_[0] = x;
     float* s = state_;
-    for (size_t n = 1; n <= kSchliereStages; ++n, s += 2) {
-      x = Stage(x, s, a1, a2, g, c);
-      node_[n] = x;
+    size_t n = 0;
+    for (size_t j = 0; j < kNumTappedNodes; ++j) {
+      size_t end = kTappedNodes[j];
+      for (; n < end; ++n, s += 2) {
+        x = Stage(x, s, a1, a2, g2, c);
+      }
+      node_[end] = x;
     }
+    a1 += a1_step;
+    a2 += a2_step;
 
     // Taps: hold zone around each detent, crossfade in between. The weights
     // run through two lowpasses, so the crossfade stays band-limited.
@@ -411,11 +450,20 @@ void Schliere::Process(
     for (int32_t j = 0; j < static_cast<int32_t>(kSchliereTaps); ++j) {
       float w = j == index ? 1.0f - t : (j == index + 1 ? t : 0.0f);
       if (switches_.smooth_tap_weights) {
+        float* lp = tap_lp_[j];
         if (first) {
-          tap_lp_[j][0] = tap_lp_[j][1] = w;
+          lp[0] = lp[1] = w;
         }
-        w = Lowpass(Lowpass(w, &tap_lp_[j][0], tap_weight_g_),
-                    &tap_lp_[j][1], tap_weight_g_);
+        if (w == 0.0f && lp[0] == 0.0f && lp[1] == 0.0f) {
+          continue;  // inactive tap, settled
+        }
+        w = Lowpass(Lowpass(w, &lp[0], tap_weight_g_), &lp[1], tap_weight_g_);
+        if (fabsf(lp[0]) < 1.0e-7f && fabsf(lp[1]) < 1.0e-7f &&
+            fabsf(w) < 1.0e-7f) {
+          lp[0] = lp[1] = 0.0f;  // flush the decayed tail
+        }
+      } else if (w == 0.0f) {
+        continue;
       }
       left += w * node_[kTapsL[j]];
       right_classic += w * node_[kTapsR[j]];
