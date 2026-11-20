@@ -30,9 +30,12 @@
 
 #include <algorithm>
 
+#include <stm32f4xx_conf.h>
+
 #include "stmlib/system/system_clock.h"
 
 #include "rings/cv_scaler.h"
+#include "rings/diagnostics.h"
 #include "rings/dsp/part.h"
 #include "rings/dsp/string_synth_part.h"
 
@@ -42,7 +45,17 @@ const int32_t kLongPressDuration = 3000;
 const int32_t kMediumPressDuration = 200;
 // Both switches must be held this long to enter calibration.
 const int32_t kCalibrationPressDuration = 6000;
+// Schliere bank, right button: held this long (but released before
+// kLongPressDuration, which changes the bank) toggles the 96 kHz path.
+const int32_t kSchliereToggleDuration = 1000;
 const uint32_t kSchliereDisplayDuration = 1500;
+
+
+// Diagnostics (rings/diagnostics.h): benchmark display timing.
+const uint32_t kBlinkPeriod = 800;
+const uint32_t kBenchmarkLeadIn = 1500;  // all off before the tens
+const uint32_t kBenchmarkGap = 1000;  // all off between tens and ones
+const uint32_t kBenchmarkPause = 2000;
 
 using namespace std;
 using namespace stmlib;
@@ -70,6 +83,16 @@ void Ui::Init(
     settings_->Save();
   }
   
+  schliere_cycles_peak_ = 0;
+  base_cycles_peak_ = 0;
+  benchmark_value_ = 0;
+  benchmark_start_ = 0;
+  load_peak_ = 0;
+  load_shown_ = 0;
+  load_time_ = 0;
+  benchmark_base_only_ = false;
+  schliere_excite_request_ = false;
+  excite_display_time_ = 0;
   schliere_limiter_active_ = false;
   schliere_tap_detent_ = 0;
   shown_tap_detent_ = 0;
@@ -98,6 +121,58 @@ void Ui::SetModel(int32_t model) {
 
 void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
   uint32_t now = system_clock.milliseconds();
+#ifdef SCHLIERE_BENCHMARK
+  {
+    uint32_t tens = benchmark_value_ / 10;
+    uint32_t ones = benchmark_value_ % 10;
+    uint32_t tens_blinks = tens ? tens : 1;
+    uint32_t ones_blinks = ones ? ones : 1;
+    uint32_t t = now - benchmark_start_;
+    uint32_t tens_start = kBenchmarkLeadIn;
+    uint32_t tens_end = tens_start + tens_blinks * kBlinkPeriod;
+    uint32_t ones_start = tens_end + kBenchmarkGap;
+    uint32_t ones_end = ones_start + ones_blinks * kBlinkPeriod;
+    uint32_t total = ones_end + kBenchmarkPause;
+    if (benchmark_start_ == 0 || t >= total) {
+      // Latch the peaks measured during the last repetition.
+      uint32_t cycles = base_cycles_peak_;
+      if (!benchmark_base_only_) {
+        cycles += schliere_cycles_peak_;
+      }
+      benchmark_value_ = cycles / 840;  // percent of 84 000 cycles
+      if (benchmark_value_ > 199) {
+        benchmark_value_ = 199;  // up to 19 red blinks
+      }
+      schliere_cycles_peak_ = 0;
+      base_cycles_peak_ = 0;
+      benchmark_start_ = now | 1;
+      t = 0;
+    }
+    if (t < tens_start || (t >= tens_end && t < ones_start)) {
+      leds_.set(0, false, false);
+      leds_.set(1, false, false);
+    } else if (t < tens_end) {
+      bool on = ((t - tens_start) % kBlinkPeriod) < kBlinkPeriod / 2;
+      leds_.set(0, on, on && tens == 0);
+      leds_.set(1, false, false);
+    } else if (t < ones_end) {
+      bool on = ((t - ones_start) % kBlinkPeriod) < kBlinkPeriod / 2;
+      leds_.set(0, false, false);
+      leds_.set(1, on && ones == 0, on);
+    } else {
+      // Pause: LED 1 = bank (green = grounded models, yellow = bonus
+      // models, red = Schliere); LED 2 = 96 kHz feedback path (green = on,
+      // yellow = off) or red = base load only.
+      bool schliere = settings_->state().schliere;
+      leds_.set(0, schliere || part_->model() >= 3, !schliere);
+      bool oversampled = settings_->schliere_option(
+          kSchliereOptionOversampled);
+      leds_.set(1, benchmark_base_only_ || !oversampled,
+                !benchmark_base_only_);
+    }
+    return;
+  }
+#endif  // SCHLIERE_BENCHMARK
   int32_t detent = schliere_tap_detent_;
   if (detent != shown_tap_detent_) {
     shown_tap_detent_ = detent;
@@ -106,29 +181,57 @@ void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
     }
   }
   
-  // LED 1: dry/wet step (0 / 25 / 50 / 75 / 100 % wet = off / green /
-  // yellow / red / red blinking), tap resting on a detent (green), or the
-  // loop limiter at work (red).
-  if (mix_display_time_ && now - mix_display_time_ < kSchliereDisplayDuration) {
-    switch (4 - settings_->state().schliere_dry_steps) {
-      case 0: leds_.set(0, false, false); break;
-      case 1: leds_.set(0, false, true); break;
-      case 2: leds_.set(0, true, true); break;
-      case 3: leds_.set(0, true, false); break;
-      default: leds_.set(0, blink, false); break;
+  // LED 1: excite flavor after a long press of the left button (green =
+  // impulse, yellow = noise burst), dry/wet step after a short press (100 /
+  // 75 / 50 / 25 % wet = red / yellow / green / off), tap reaching a detent
+  // (green), or the loop limiter at work (red).
+  if (excite_display_time_ &&
+      now - excite_display_time_ < kSchliereDisplayDuration) {
+    leds_.set(0, settings_->schliere_option(kSchliereOptionNoiseBurst), true);
+  } else if (mix_display_time_ &&
+             now - mix_display_time_ < kSchliereDisplayDuration) {
+    // Wet share: red / yellow / green / off = 100 / 75 / 50 / 25 % wet.
+    switch (settings_->state().schliere_dry_steps) {
+      case 0: leds_.set(0, true, false); break;
+      case 1: leds_.set(0, true, true); break;
+      case 2: leds_.set(0, false, true); break;
+      default: leds_.set(0, false, false); break;
     }
   } else if (detent_display_time_ &&
              now - detent_display_time_ < kSchliereDisplayDuration &&
              shown_tap_detent_ != 0) {
     leds_.set(0, false, true);
   } else {
+#ifdef SCHLIERE_CPU_METER
+    uint32_t load = load_peak_;
+    if (load >= load_shown_ || now - load_time_ > 1000) {
+      load_shown_ = load;
+      load_time_ = now;
+      load_peak_ = 0;
+    }
+    if (load_shown_ < 60) {
+      leds_.set(0, false, true);
+    } else if (load_shown_ < 80) {
+      leds_.set(0, true, true);
+    } else if (load_shown_ < 95) {
+      leds_.set(0, true, false);
+    } else {
+      leds_.set(0, blink, false);
+    }
+#else
     leds_.set(0, schliere_limiter_active_, false);
+#endif  // SCHLIERE_CPU_METER
   }
   
-  // LED 2: hard blink marks the bank, the color the excite flavor (green =
-  // impulse, yellow = noise burst).
-  bool burst = settings_->state().schliere_excite == SCHLIERE_EXCITE_NOISE_BURST;
-  leds_.set(1, slow_blink && burst, slow_blink);
+  // LED 2: hard blink marks the bank, the color the feedback path (green =
+  // 96 kHz, yellow = 48 kHz). While the right button is held between 1 and
+  // 3 s, it previews the path selected on release.
+  bool yellow = !settings_->schliere_option(kSchliereOptionOversampled);
+  if (switches_.pressed(1) && press_time_[1] != 0 &&
+      static_cast<int32_t>(now - press_time_[1]) >= kSchliereToggleDuration) {
+    yellow = !yellow;
+  }
+  leds_.set(1, slow_blink && yellow, slow_blink);
 }
 
 void Ui::ToggleFrequencyLocking() {
@@ -155,6 +258,12 @@ void Ui::Poll() {
     if (switches_.just_pressed(i)) {
       queue_.AddEvent(CONTROL_SWITCH, i, 0);
       press_time_[i] = system_clock.milliseconds();
+      // Schliere bank: the right button excites the chain as soon as it goes
+      // down (not when the left one is held: frequency locking/calibration).
+      if (i == 1 && mode_ == UI_MODE_NORMAL && settings_->state().schliere &&
+          !switches_.pressed(0)) {
+        schliere_excite_request_ = true;
+      }
     }
     if (switches_.pressed(i) && press_time_[i] != 0) {
       int32_t pressed_time = system_clock.milliseconds() - press_time_[i];
@@ -232,9 +341,13 @@ void Ui::Poll() {
             leds_.set(1, led_1, led_2);
           }
         }
+#ifdef SCHLIERE_BENCHMARK
+        UpdateSchliereLeds(blink, slow_blink);
+#else
         if (settings_->state().schliere) {
           UpdateSchliereLeds(blink, slow_blink);
         }
+#endif  // SCHLIERE_BENCHMARK
         ++strumming_flag_interval_;
         if (strumming_flag_counter_) {
           --strumming_flag_counter_;
@@ -350,7 +463,11 @@ void Ui::OnSwitchReleased(const Event& e) {
         if (cv_scaler_->easter_egg()) {
           settings_->ToggleEasterEgg();
           AnimateEasterEggLeds();
-        } else if (!settings_->state().schliere) {
+        } else if (settings_->state().schliere) {
+          // Excite flavor (polyphony has no meaning in the Schliere bank).
+          settings_->ToggleSchliereOption(kSchliereOptionNoiseBurst);
+          excite_display_time_ = system_clock.milliseconds() | 1;
+        } else {
           part_->set_polyphony(3);
           string_synth_->set_polyphony(3);
         }
@@ -370,6 +487,13 @@ void Ui::OnSwitchReleased(const Event& e) {
             CalibrateHigh();
             break;
           default:
+#ifdef SCHLIERE_BENCHMARK
+            if (settings_->state().schliere) {
+              // Diagnostic: show the base load without Schliere::Process.
+              benchmark_base_only_ = !benchmark_base_only_;
+              break;
+            }
+#endif  // SCHLIERE_BENCHMARK
             if (settings_->state().schliere) {
               settings_->NextSchliereMix();
               mix_display_time_ = system_clock.milliseconds() | 1;
@@ -413,9 +537,11 @@ void Ui::OnSwitchReleased(const Event& e) {
           }
         }
       } else if (settings_->state().schliere) {
-        // Excite flavor, to be decided by ear (later: variant select).
-        State* state = settings_->mutable_state();
-        state->schliere_excite = !state->schliere_excite;
+        // The press itself excited the chain. Held 1..3 s: feedback path at
+        // 96 kHz (variant S as on the AC/DC) or 48 kHz.
+        if (e.data >= kSchliereToggleDuration) {
+          settings_->ToggleSchliereOption(kSchliereOptionOversampled);
+        }
       } else {
         int32_t model = part_->model();
         if (model >= 3) {

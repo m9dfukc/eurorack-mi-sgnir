@@ -42,7 +42,9 @@ namespace rings {
 using namespace std;
 using namespace stmlib;
 
-const float kSchliereCvLpCoefficient = 0.5f;  // about 220 Hz at 2 kHz
+// Same smoothing as Rings' own STRUCTURE CV path for now: unfiltered ADC
+// noise on tap/feedback would amplitude-modulate the output. [open] tune.
+const float kSchliereCvLpCoefficient = 0.1f;
 
 /* static */
 ChannelSettings CvScaler::channel_settings_[ADC_CHANNEL_LAST] = {
@@ -293,7 +295,9 @@ void CvScaler::ReadSchliere(
   // Only a trigger at the STRUM jack excites: Rings' internal strum would
   // fire on every transient of the input.
   p->excite = performance_state.strum && !performance_state.internal_strum;
-  p->excite_type = static_cast<SchliereExcite>(state.schliere_excite);
+  p->excite_type = (state.schliere_options & kSchliereOptionNoiseBurst)
+      ? SCHLIERE_EXCITE_NOISE_BURST
+      : SCHLIERE_EXCITE_IMPULSE;
 }
 
 }  // namespace rings

@@ -39,6 +39,10 @@ namespace rings {
 // the stock firmware carry arbitrary bytes there (formerly padding).
 const uint32_t kStateExtensionId = 0x53474e31;  // 'SGN1'
 
+// Bits of State::schliere_options (default 0: impulse excite, 48 kHz).
+const uint8_t kSchliereOptionNoiseBurst = 1;  // excite with a noise burst
+const uint8_t kSchliereOptionOversampled = 2;  // feedback path at 96 kHz
+
 struct CalibrationData {
   float pitch_offset;
   float pitch_scale;
@@ -59,8 +63,8 @@ struct State {
   float locked_transpose;
   uint8_t frequency_locked;
   uint8_t schliere;  // 1 = the Schliere bank is active
-  uint8_t schliere_dry_steps;  // wet = 100 % - 25 % * steps (0 = 100 % wet)
-  uint8_t schliere_excite;  // SchliereExcite
+  uint8_t schliere_dry_steps;  // 0..3: wet = 100 / 75 / 50 / 25 %
+  uint8_t schliere_options;  // kSchliereOption* bits
 };
 
 struct SettingsData {
@@ -98,15 +102,23 @@ class Settings {
     data_.state.frequency_locked = 0;
   }
   
-  // Dry/wet steps of the Schliere bank: 0, 25, 50, 75, 100 % wet.
+  // Dry/wet steps of the Schliere bank: 100, 75, 50, 25 % wet.
   inline float schliere_mix() const {
     return 1.0f - 0.25f * static_cast<float>(data_.state.schliere_dry_steps);
   }
   
+  inline bool schliere_option(uint8_t option) const {
+    return (data_.state.schliere_options & option) != 0;
+  }
+  
+  inline void ToggleSchliereOption(uint8_t option) {
+    data_.state.schliere_options ^= option;
+  }
+  
   inline void NextSchliereMix() {
-    // One step wetter, from 100 % back to 0 %.
+    // One step drier: 100 -> 75 -> 50 -> 25 -> 100 % wet.
     uint8_t& dry = data_.state.schliere_dry_steps;
-    dry = dry == 0 ? 4 : dry - 1;
+    dry = dry >= 3 ? 0 : dry + 1;
   }
   
   inline State* mutable_state() {

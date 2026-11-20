@@ -87,6 +87,35 @@ class Ui {
     schliere_tap_detent_ = tap_detent;
   }
   
+  // Schliere bank: excitation requested with the right button (called from
+  // the audio callback, clears the request).
+  inline bool TakeSchliereExciteRequest() {
+    bool request = schliere_excite_request_;
+    schliere_excite_request_ = false;
+    return request;
+  }
+  
+  // CPU load of the last audio block in percent (called from the audio
+  // callback). Shown as a peak-hold meter on LED 1 in the Schliere bank.
+  void set_load(uint32_t percent) {
+    if (percent > load_peak_) {
+      load_peak_ = percent;
+    }
+  }
+  
+  // Diagnostic benchmark: peak cycles of Schliere::Process and of the rest
+  // of FillBuffer (called from the audio callback).
+  void set_schliere_cycles(uint32_t cycles) {
+    if (cycles > schliere_cycles_peak_) {
+      schliere_cycles_peak_ = cycles;
+    }
+  }
+  void set_base_cycles(uint32_t cycles) {
+    if (cycles > base_cycles_peak_) {
+      base_cycles_peak_ = cycles;
+    }
+  }
+  
   void set_strumming_flag(bool flag) {
     if (flag) {
       // Make sure the LED is off for a short enough time.
@@ -123,6 +152,16 @@ class Ui {
   
   // Schliere bank: LED 1 shows the dry/wet step after a press of the left
   // button, the tap detent after it changes, otherwise the loop limiter.
+  volatile uint32_t schliere_cycles_peak_;
+  volatile uint32_t base_cycles_peak_;
+  uint32_t benchmark_value_;
+  uint32_t benchmark_start_;
+  volatile uint32_t load_peak_;
+  uint32_t load_shown_;
+  uint32_t load_time_;
+  volatile bool schliere_excite_request_;
+  bool benchmark_base_only_;  // diagnostics: show the base load only
+  uint32_t excite_display_time_;
   volatile bool schliere_limiter_active_;
   volatile int32_t schliere_tap_detent_;
   int32_t shown_tap_detent_;

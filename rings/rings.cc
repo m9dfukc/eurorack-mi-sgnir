@@ -33,6 +33,7 @@
 #include "rings/dsp/strummer.h"
 #include "rings/dsp/string_synth_part.h"
 #include "rings/cv_scaler.h"
+#include "rings/diagnostics.h"
 #include "rings/settings.h"
 #include "rings/ui.h"
 
@@ -90,6 +91,18 @@ bool schliere_active = false;
 // Peak cycle count of FillBuffer() (DWT cycle counter), for profiling over
 // SWD. Budget per block: 24 samples at 48 kHz = 500 us = 84 000 cycles.
 volatile uint32_t fill_buffer_cycles_peak = 0;
+const uint32_t kBlockBudgetCycles = 84000;
+
+// Overload guard: if FillBuffer() runs over budget for this many blocks in a
+// row while Schliere is active, leave the Schliere bank. Over budget, the
+// audio interrupt starves the UI, so the buttons could not do it.
+const int32_t kOverloadBlocks = 400;  // 0.2 s
+int32_t overload_blocks = 0;
+
+// SCHLIERE_BENCHMARK (rings/diagnostics.h): see there.
+uint32_t benchmark_counter = 0;
+float benchmark_l[kMaxBlockSize];
+float benchmark_r[kMaxBlockSize];
 float in_level = 0.0f;
 
 void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
@@ -114,7 +127,28 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
     SchliereParameters schliere_parameters;
     cv_scaler.ReadSchliere(
         patch, performance_state, settings.state(), &schliere_parameters);
+    if (ui.TakeSchliereExciteRequest()) {
+      schliere_parameters.excite = true;  // right button
+    }
+    // Variant S, by default without its 96 kHz feedback path: that costs
+    // ≈ 8–11 % of the block budget on the module (≈ 89 % instead of 81 %
+    // peak), and with block-rate CVs the difference is small (audible, 48 kHz
+    // judged fine; user 2026-11-20). Selectable with the right button.
+    schliere.set_oversampled_feedback(
+        settings.state().schliere_options & kSchliereOptionOversampled);
+#ifdef SCHLIERE_BENCHMARK
+    if ((++benchmark_counter & 15) == 0) {
+      uint32_t t0 = DWT->CYCCNT;
+      schliere.Process(
+          schliere_parameters, in, benchmark_l, benchmark_r, size);
+      ui.set_schliere_cycles(DWT->CYCCNT - t0);
+    }
+    for (size_t i = 0; i < size; ++i) {
+      out[i] = aux[i] = in[i];
+    }
+#else
     schliere.Process(schliere_parameters, in, out, aux, size);
+#endif  // SCHLIERE_BENCHMARK
     ui.set_schliere_status(schliere.limiter_active(), schliere.tap_detent());
   } else if (settings.state().easter_egg) {
     schliere_active = false;
@@ -148,6 +182,20 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
   if (cycles > fill_buffer_cycles_peak) {
     fill_buffer_cycles_peak = cycles;
   }
+  ui.set_load(cycles * 100 / kBlockBudgetCycles);
+#ifdef SCHLIERE_BENCHMARK
+  if (!schliere_active || (benchmark_counter & 15) != 0) {
+    ui.set_base_cycles(cycles);  // everything but Schliere::Process
+  }
+#endif  // SCHLIERE_BENCHMARK
+  if (schliere_active && cycles > kBlockBudgetCycles) {
+    if (++overload_blocks >= kOverloadBlocks) {
+      settings.mutable_state()->schliere = 0;  // saved with the next press
+      overload_blocks = 0;
+    }
+  } else {
+    overload_blocks = 0;
+  }
 #ifdef PROFILE_INTERRUPT
   TOC
 #endif  // PROFILE_INTERRUPT
@@ -159,6 +207,13 @@ void Init() {
   
   sys.Init(true);
   version.Init();
+  
+  // Flash prefetch buffer: SystemInit only enables the caches. Measured on
+  // the module: about 10 % less load with Schliere. Not on revision A
+  // silicon (errata: prefetch not functional).
+  if ((DBGMCU->IDCODE >> 16) != 0x1000) {
+    FLASH->ACR |= FLASH_ACR_PRFTEN;
+  }
   
   // Enable the DWT cycle counter (profiling, see fill_buffer_cycles_peak).
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;

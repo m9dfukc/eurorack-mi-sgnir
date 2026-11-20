@@ -1,0 +1,50 @@
+// Copyright 2026 m9dfukc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+//
+// See http://creativecommons.org/licenses/MIT/ for more information.
+//
+// -----------------------------------------------------------------------------
+//
+// Diagnostic builds for measuring the CPU load on the module without a
+// debugger. All off in release builds.
+//
+// SCHLIERE_CPU_METER: in the Schliere bank, LED 1 shows the load of the last
+// second (green < 60 %, yellow < 80 %, red < 95 %, red blinking above)
+// instead of the limiter, and the right button (short) toggles the 96 kHz
+// feedback path (LED 2 green = on, yellow = off) instead of the excite
+// flavor.
+//
+// SCHLIERE_BENCHMARK (needs SCHLIERE_CPU_METER): in the Schliere bank,
+// Schliere runs only on every 16th block (audio passes dry), so the module
+// is never overloaded. In every bank the LEDs blink the load in percent of
+// the block budget: 1.5 s off, LED 1 red = tens, 1 s off, LED 2 green = ones
+// (a digit 0 = one yellow blink), 2 s status (LED 1: bank green / yellow, or
+// prefetch red = off / yellow = on in the Schliere bank; LED 2: 96 kHz path
+// green = on / yellow = off / red = base load only). In the Schliere bank,
+// right short cycles 96 kHz on -> off -> base load only, left short toggles
+// the flash prefetch.
+
+#ifndef RINGS_DIAGNOSTICS_H_
+#define RINGS_DIAGNOSTICS_H_
+
+// #define SCHLIERE_CPU_METER
+// #define SCHLIERE_BENCHMARK
+
+#endif  // RINGS_DIAGNOSTICS_H_
