@@ -42,6 +42,8 @@ namespace rings {
 using namespace std;
 using namespace stmlib;
 
+const float kSchliereCvLpCoefficient = 0.5f;  // about 220 Hz at 2 kHz
+
 /* static */
 ChannelSettings CvScaler::channel_settings_[ADC_CHANNEL_LAST] = {
   { LAW_LINEAR, true, 1.00f },  // ADC_CHANNEL_CV_FREQUENCY
@@ -84,6 +86,8 @@ void CvScaler::Init(CalibrationData* calibration_data) {
   inhibit_strum_ = 0;
   pot_transpose_ = 0.0f;
   octave_ = 0;
+  schliere_octave_ = 0;
+  fill(&cv_fast_[0], &cv_fast_[ADC_CHANNEL_NUM_OFFSETS], 0.0f);
   fm_cv_ = 0.0f;
   
   normalization_probe_enabled_ = true;
@@ -178,6 +182,11 @@ void CvScaler::Read(
         break;
     }
     adc_lp_[i] += settings.lp_coefficient * (value - adc_lp_[i]);
+    if (i < ADC_CHANNEL_NUM_OFFSETS) {
+      // Lightly filtered copy of the CVs for Schliere, which smooths its
+      // modulation paths itself. [hypothesis] tune against ADC noise.
+      cv_fast_[i] += kSchliereCvLpCoefficient * (value - cv_fast_[i]);
+    }
   }
   
   ATTENUVERT(patch->structure, STRUCTURE, 0.0f, 0.9995f);
@@ -246,6 +255,45 @@ void CvScaler::Read(
   
   adc_.Convert();
   trigger_input_.Read();
+}
+
+void CvScaler::ReadSchliere(
+    const Patch& patch,
+    const PerformanceState& performance_state,
+    const State& state,
+    SchliereParameters* p) {
+  // Continuous frequency over the whole knob (about 11 octaves), not the
+  // semitone-quantized Rings transpose. Frequency locking captures the raw
+  // pot position.
+  float pot = adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
+  pot_transpose_ = 60.0f * pot;
+  p->frequency = pot;
+  p->octaves = (performance_state.note + performance_state.fm) / 12.0f;
+  if (state.frequency_locked) {
+    // Alt function: the pot snaps to whole octaves of the locked frequency.
+    float locked = state.locked_transpose / 60.0f;
+    float octave = (pot - locked) * kSchliereKnobOctaves;
+    float hysteresis = octave - schliere_octave_ > 0.0f ? -0.1f : +0.1f;
+    schliere_octave_ = static_cast<int32_t>(
+        floorf(octave + hysteresis + 0.5f));
+    p->frequency = locked;
+    p->octaves += static_cast<float>(schliere_octave_);
+  }
+  
+  p->resonance = patch.brightness;
+  p->tap = adc_lp_[ADC_CHANNEL_POT_STRUCTURE];
+  p->tap_cv = cv_fast_[ADC_CHANNEL_CV_STRUCTURE] * \
+      adc_lp_[ADC_CHANNEL_ATTENUVERTER_STRUCTURE];
+  p->feedback = adc_lp_[ADC_CHANNEL_POT_DAMPING];
+  p->feedback_cv = cv_fast_[ADC_CHANNEL_CV_DAMPING] * \
+      adc_lp_[ADC_CHANNEL_ATTENUVERTER_DAMPING];
+  p->spread = patch.position;
+  p->mix = 1.0f - 0.25f * static_cast<float>(state.schliere_dry_steps);
+  
+  // Only a trigger at the STRUM jack excites: Rings' internal strum would
+  // fire on every transient of the input.
+  p->excite = performance_state.strum && !performance_state.internal_strum;
+  p->excite_type = static_cast<SchliereExcite>(state.schliere_excite);
 }
 
 }  // namespace rings

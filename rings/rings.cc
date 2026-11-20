@@ -29,6 +29,7 @@
 #include "rings/drivers/system.h"
 #include "rings/drivers/version.h"
 #include "rings/dsp/part.h"
+#include "rings/dsp/schliere.h"
 #include "rings/dsp/strummer.h"
 #include "rings/dsp/string_synth_part.h"
 #include "rings/cv_scaler.h"
@@ -83,25 +84,47 @@ float out[kMaxBlockSize];
 float aux[kMaxBlockSize];
 
 const float kNoiseGateThreshold = 0.00003f;
+Schliere schliere;
+bool schliere_active = false;
+
+// Peak cycle count of FillBuffer() (DWT cycle counter), for profiling over
+// SWD. Budget per block: 24 samples at 48 kHz = 500 us = 84 000 cycles.
+volatile uint32_t fill_buffer_cycles_peak = 0;
 float in_level = 0.0f;
 
 void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
 #ifdef PROFILE_INTERRUPT
   TIC
 #endif  // PROFILE_INTERRUPT
+  uint32_t start_cycles = DWT->CYCCNT;
   PerformanceState performance_state;
   Patch patch;
   
   cv_scaler.DetectAudioNormalization(input, size);
   cv_scaler.Read(&patch, &performance_state, settings.state());
   
-  if (settings.state().easter_egg) {
+  if (settings.state().schliere) {
+    if (!schliere_active) {
+      schliere.Init(SCHLIERE_VARIANT_S);  // start from a silent chain
+      schliere_active = true;
+    }
+    for (size_t i = 0; i < size; ++i) {
+      in[i] = static_cast<float>(input[i].r) / 32768.0f;
+    }
+    SchliereParameters schliere_parameters;
+    cv_scaler.ReadSchliere(
+        patch, performance_state, settings.state(), &schliere_parameters);
+    schliere.Process(schliere_parameters, in, out, aux, size);
+    ui.set_schliere_status(schliere.limiter_active(), schliere.tap_detent());
+  } else if (settings.state().easter_egg) {
+    schliere_active = false;
     for (size_t i = 0; i < size; ++i) {
       in[i] = static_cast<float>(input[i].r) / 32768.0f;
     }
     strummer.Process(NULL, size, &performance_state);
     string_synth.Process(performance_state, patch, in, out, aux, size);
   } else {
+    schliere_active = false;
     // Apply noise gate.
     for (size_t i = 0; i < size; ++i) {
       float in_sample = static_cast<float>(input[i].r) / 32768.0f;
@@ -121,6 +144,10 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
     output[i].r = Clip16(static_cast<int32_t>(aux[i] * 32768.0f));
   }
   ui.set_strumming_flag(performance_state.strum);
+  uint32_t cycles = DWT->CYCCNT - start_cycles;
+  if (cycles > fill_buffer_cycles_peak) {
+    fill_buffer_cycles_peak = cycles;
+  }
 #ifdef PROFILE_INTERRUPT
   TOC
 #endif  // PROFILE_INTERRUPT
@@ -132,6 +159,11 @@ void Init() {
   
   sys.Init(true);
   version.Init();
+  
+  // Enable the DWT cycle counter (profiling, see fill_buffer_cycles_peak).
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
   strummer.Init(0.01f, kSampleRate / kMaxBlockSize);
   part.Init(reverb_buffer);

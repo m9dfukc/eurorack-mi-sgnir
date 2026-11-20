@@ -41,6 +41,25 @@ tested across machines).
 
 The `size` make target pipes through `figlet`/`cowsay` — install them or ignore the error.
 
+### Host tests
+
+The Schliere DSP has host tests (transfer functions from impulse responses, checked against the
+textbook allpass and the Smear manual, plus the Rings additions):
+
+```bash
+c++ -std=c++11 -O2 -DTEST -I. -o schliere_test \
+    rings/test/schliere_test.cc rings/dsp/schliere.cc && ./schliere_test
+```
+
+An equivalence test against the original OWL patch lives in the workbench repo
+(`tests/schliere/`).
+
+### Profiling
+
+`FillBuffer()` records its peak cycle count (DWT cycle counter) in the global
+`fill_buffer_cycles_peak`; read it over SWD. Budget per block: 84 000 cycles (24 samples at
+48 kHz, 168 MHz).
+
 ## Differences from the stock firmware
 
 Not yet tested on hardware.
@@ -77,6 +96,37 @@ jack-detection threshold — leave that alone unless you know what it does.
 Unlike stock, the CV input zero points captured in step 2 are only applied if step 3 succeeds,
 so an aborted calibration cannot leave them behind.
 
+### Schliere (third bank)
+
+A long chain of 61 second-order allpass filters with feedback, inspired by the Smoothie Audio
+*Smear*: transients smear into chirps, with feedback it becomes a resonator. Port of variant
+**S** of the author's Schliere patch for the AC/DC (OWL).
+
+**Selecting it:** a long press (3 s) of the right button cycles through three banks: grounded
+models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** → grounded models.
+
+| Control | Function |
+|---|---|
+| FREQUENCY + V/OCT + FM | Frequency, continuous over the whole knob (20 Hz … 20 kHz), V/OCT 1 V/oct (calibrated) |
+| STRUCTURE + CV + att. | Tap: where L is taken from the chain, seven detents with hold zones (crossfades in between create notches) |
+| BRIGHTNESS + CV + att. | Resonance (Q 0.01 … 16) |
+| DAMPING + CV + att. | Feedback, knob 0 … 95 %; a negative CV inverts the loop |
+| POSITION + CV + att. | Spread: CCW mono (R = L), noon classic stereo, CW R at the chain end |
+| STRUM | Excite: an impulse or a short noise burst into the chain (only a trigger at the jack) |
+| IN | Audio (no noise gate) |
+| ODD / EVEN | L / R |
+| Left button | Dry/wet: 0 → 25 → 50 → 75 → 100 % wet (default 100 %). 50 % gives the deepest phaser notches |
+| Right button (short) | Excite flavor: impulse (LED 2 green) / noise burst (LED 2 yellow) |
+| Both buttons | Frequency locking as above; while locked, the FREQUENCY knob snaps to whole octaves of the locked frequency (about one octave per 9 % of travel) |
+
+**LED 1:** after a press of the left button, the dry/wet step for 1.5 s (off / green / yellow /
+red / red blinking = 0 / 25 / 50 / 75 / 100 %); after the tap knob reaches a detent, green for
+1.5 s; otherwise red while the limiter in the feedback loop works.
+
+Differences from the AC/DC version: CVs are read once per 24-sample block (no audio-rate CV), no
+CV dead zone (Rings has calibrated offsets and attenuverters), `tanh` replaced by stmlib's
+`SoftClip`, two outputs instead of four. Spread, excite and dry/wet are new.
+
 ### Settings compatibility
 
 The new settings live in formerly unused bytes of the settings block, whose size is unchanged.
@@ -87,8 +137,8 @@ stock firmware can still read the settings after a rollback.
 
 Developed in the (separate) workbench repo `eurorack-mi-rings`:
 
-1. **Schliere** — a chain of 61 second-order allpass filters with feedback (inspired by the
-   Smoothie Audio *Smear*), as an additional mode next to the resonator models.
+1. Schliere: variants O and A on the right button (the switches are implemented), level
+   adjustment after measuring Rings' input/output ranges, CPU profiling on hardware.
 2. New chord tables from the [lylepmills fork](https://github.com/lylepmills/eurorack)
    (optional).
 
@@ -96,7 +146,7 @@ Developed in the (separate) workbench repo `eurorack-mi-rings`:
 
 - **Mutable Instruments / Émilie Gillet** — Rings firmware, stmlib, stm_audio_bootloader (MIT)
 - **Lyle Mills** — alternative Rings firmware features (MIT)
-- Schliere DSP originates from the author's OWL patch for the Befaco/Rebel Technology AC/DC
+- Schliere DSP (`rings/dsp/schliere.*`, MIT) originates from the author's OWL patch for the Befaco/Rebel Technology AC/DC
   (acdc-workbench project)
 
 ## License

@@ -81,6 +81,12 @@ class Ui {
     mode_ = UI_MODE_PANIC;
   }
   
+  // Called from the audio callback while the Schliere bank is active.
+  void set_schliere_status(bool limiter_active, int32_t tap_detent) {
+    schliere_limiter_active_ = limiter_active;
+    schliere_tap_detent_ = tap_detent;
+  }
+  
   void set_strumming_flag(bool flag) {
     if (flag) {
       // Make sure the LED is off for a short enough time.
@@ -102,6 +108,8 @@ class Ui {
   void CalibrateHigh();
   void SaveState();
   void ToggleFrequencyLocking();
+  void SetModel(int32_t model);
+  void UpdateSchliereLeds(bool blink, bool slow_blink);
   void AnimateEasterEggLeds();
 
   stmlib::EventQueue<16> queue_;
@@ -112,6 +120,14 @@ class Ui {
   UiMode mode_;
   int32_t strumming_flag_counter_;
   int32_t strumming_flag_interval_;
+  
+  // Schliere bank: LED 1 shows the dry/wet step after a press of the left
+  // button, the tap detent after it changes, otherwise the loop limiter.
+  volatile bool schliere_limiter_active_;
+  volatile int32_t schliere_tap_detent_;
+  int32_t shown_tap_detent_;
+  uint32_t mix_display_time_;
+  uint32_t detent_display_time_;
   
   Settings* settings_;
   CvScaler* cv_scaler_;

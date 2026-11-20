@@ -58,7 +58,9 @@ struct State {
   uint32_t extension_id;
   float locked_transpose;
   uint8_t frequency_locked;
-  uint8_t reserved[3];
+  uint8_t schliere;  // 1 = the Schliere bank is active
+  uint8_t schliere_dry_steps;  // wet = 100 % - 25 % * steps (0 = 100 % wet)
+  uint8_t schliere_excite;  // SchliereExcite
 };
 
 struct SettingsData {
@@ -94,6 +96,17 @@ class Settings {
   
   inline void UnlockFrequency() {
     data_.state.frequency_locked = 0;
+  }
+  
+  // Dry/wet steps of the Schliere bank: 0, 25, 50, 75, 100 % wet.
+  inline float schliere_mix() const {
+    return 1.0f - 0.25f * static_cast<float>(data_.state.schliere_dry_steps);
+  }
+  
+  inline void NextSchliereMix() {
+    // One step wetter, from 100 % back to 0 %.
+    uint8_t& dry = data_.state.schliere_dry_steps;
+    dry = dry == 0 ? 4 : dry - 1;
   }
   
   inline State* mutable_state() {

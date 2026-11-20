@@ -37,6 +37,7 @@
 #include "rings/drivers/trigger_input.h"
 
 #include "rings/settings.h"
+#include "rings/dsp/schliere.h"
 
 namespace rings {
 
@@ -99,6 +100,13 @@ class CvScaler {
       Patch* patch,
       PerformanceState* performance_state,
       const State& state);
+
+  // Schliere bank: call after Read() of the same block.
+  void ReadSchliere(
+      const Patch& patch,
+      const PerformanceState& performance_state,
+      const State& state,
+      SchliereParameters* parameters);
 
   void DetectAudioNormalization(Codec::Frame* in, size_t size);
 
@@ -228,6 +236,8 @@ class CvScaler {
   float cv_low_;
   int32_t chord_;
   int32_t octave_;
+  int32_t schliere_octave_;
+  float cv_fast_[ADC_CHANNEL_NUM_OFFSETS];
   
   bool normalization_probe_enabled_;
   bool normalization_probe_forced_state_;

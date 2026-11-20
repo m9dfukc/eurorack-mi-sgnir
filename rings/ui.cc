@@ -42,6 +42,7 @@ const int32_t kLongPressDuration = 3000;
 const int32_t kMediumPressDuration = 200;
 // Both switches must be held this long to enter calibration.
 const int32_t kCalibrationPressDuration = 6000;
+const uint32_t kSchliereDisplayDuration = 1500;
 
 using namespace std;
 using namespace stmlib;
@@ -69,6 +70,12 @@ void Ui::Init(
     settings_->Save();
   }
   
+  schliere_limiter_active_ = false;
+  schliere_tap_detent_ = 0;
+  shown_tap_detent_ = 0;
+  mix_display_time_ = 0;
+  detent_display_time_ = 0;
+  
   part_->set_polyphony(settings_->state().polyphony);
   part_->set_model(static_cast<ResonatorModel>(settings_->state().model));
   string_synth_->set_polyphony(settings_->state().polyphony);
@@ -82,6 +89,46 @@ void Ui::SaveState() {
   settings_->mutable_state()->polyphony = part_->polyphony();
   settings_->mutable_state()->model = part_->model();
   settings_->Save();
+}
+
+void Ui::SetModel(int32_t model) {
+  part_->set_model(static_cast<ResonatorModel>(model));
+  string_synth_->set_fx(static_cast<FxType>(model));
+}
+
+void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
+  uint32_t now = system_clock.milliseconds();
+  int32_t detent = schliere_tap_detent_;
+  if (detent != shown_tap_detent_) {
+    shown_tap_detent_ = detent;
+    if (detent != 0) {
+      detent_display_time_ = now;
+    }
+  }
+  
+  // LED 1: dry/wet step (0 / 25 / 50 / 75 / 100 % wet = off / green /
+  // yellow / red / red blinking), tap resting on a detent (green), or the
+  // loop limiter at work (red).
+  if (mix_display_time_ && now - mix_display_time_ < kSchliereDisplayDuration) {
+    switch (4 - settings_->state().schliere_dry_steps) {
+      case 0: leds_.set(0, false, false); break;
+      case 1: leds_.set(0, false, true); break;
+      case 2: leds_.set(0, true, true); break;
+      case 3: leds_.set(0, true, false); break;
+      default: leds_.set(0, blink, false); break;
+    }
+  } else if (detent_display_time_ &&
+             now - detent_display_time_ < kSchliereDisplayDuration &&
+             shown_tap_detent_ != 0) {
+    leds_.set(0, false, true);
+  } else {
+    leds_.set(0, schliere_limiter_active_, false);
+  }
+  
+  // LED 2: hard blink marks the bank, the color the excite flavor (green =
+  // impulse, yellow = noise burst).
+  bool burst = settings_->state().schliere_excite == SCHLIERE_EXCITE_NOISE_BURST;
+  leds_.set(1, slow_blink && burst, slow_blink);
 }
 
 void Ui::ToggleFrequencyLocking() {
@@ -184,6 +231,9 @@ void Ui::Poll() {
             bool led_2 = part_->model() <= 4 && pwm_counter < triangle;
             leds_.set(1, led_1, led_2);
           }
+        }
+        if (settings_->state().schliere) {
+          UpdateSchliereLeds(blink, slow_blink);
         }
         ++strumming_flag_interval_;
         if (strumming_flag_counter_) {
@@ -300,7 +350,7 @@ void Ui::OnSwitchReleased(const Event& e) {
         if (cv_scaler_->easter_egg()) {
           settings_->ToggleEasterEgg();
           AnimateEasterEggLeds();
-        } else {
+        } else if (!settings_->state().schliere) {
           part_->set_polyphony(3);
           string_synth_->set_polyphony(3);
         }
@@ -320,6 +370,12 @@ void Ui::OnSwitchReleased(const Event& e) {
             CalibrateHigh();
             break;
           default:
+            if (settings_->state().schliere) {
+              settings_->NextSchliereMix();
+              mix_display_time_ = system_clock.milliseconds() | 1;
+              SaveState();
+              break;
+            }
             {
               int32_t polyphony = part_->polyphony();
               if (polyphony == 3) {
@@ -344,15 +400,22 @@ void Ui::OnSwitchReleased(const Event& e) {
           settings_->ToggleEasterEgg();
           AnimateEasterEggLeds();
         } else {
+          // Bank cycle: grounded models -> bonus models -> Schliere.
+          State* state = settings_->mutable_state();
           int32_t model = part_->model();
-          if (model >= 3) {
-            model -= 3;
+          if (state->schliere) {
+            state->schliere = 0;
+            SetModel(model >= 3 ? model - 3 : model);
+          } else if (model >= 3) {
+            state->schliere = 1;
           } else {
-            model += 3;
+            SetModel(model + 3);
           }
-          part_->set_model(static_cast<ResonatorModel>(model));
-          string_synth_->set_fx(static_cast<FxType>(model));
         }
+      } else if (settings_->state().schliere) {
+        // Excite flavor, to be decided by ear (later: variant select).
+        State* state = settings_->mutable_state();
+        state->schliere_excite = !state->schliere_excite;
       } else {
         int32_t model = part_->model();
         if (model >= 3) {
@@ -360,8 +423,7 @@ void Ui::OnSwitchReleased(const Event& e) {
         } else {
           model = (model + 1) % 3;
         }
-        part_->set_model(static_cast<ResonatorModel>(model));
-        string_synth_->set_fx(static_cast<FxType>(model));
+        SetModel(model);
       }
       SaveState();
       break;

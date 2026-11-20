@@ -61,6 +61,9 @@ void Settings::Init() {
   }
   CONSTRAIN(data_.state.polyphony, 1, 4);
   CONSTRAIN(data_.state.model, 0, 5);
+  CONSTRAIN(data_.state.schliere, 0, 1);
+  CONSTRAIN(data_.state.schliere_dry_steps, 0, 4);
+  CONSTRAIN(data_.state.schliere_excite, 0, 1);
   if (data_.state.frequency_locked > 1 ||
       !(data_.state.locked_transpose >= -1.0f &&
         data_.state.locked_transpose <= 61.0f)) {
@@ -73,9 +76,9 @@ void Settings::InitStateExtension() {
   data_.state.extension_id = kStateExtensionId;
   data_.state.locked_transpose = 0.0f;
   data_.state.frequency_locked = 0;
-  for (size_t i = 0; i < sizeof(data_.state.reserved); ++i) {
-    data_.state.reserved[i] = 0;
-  }
+  data_.state.schliere = 0;
+  data_.state.schliere_dry_steps = 0;
+  data_.state.schliere_excite = 0;
 }
 
 void Settings::Save() {
