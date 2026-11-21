@@ -155,7 +155,7 @@ models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** �
 | BRIGHTNESS + CV + att. | **Resonance** (Q 0.01 … 16): low = the bass arrives late, high = a narrow band around FREQUENCY rings on |
 | DAMPING + CV + att. | **Feedback**: knob 0 … ≈ 95 %, up to 97 % with CV (soft knee above 90 %). A negative CV inverts the loop (peaks and troughs swap). L goes back to the chain input through a 10 Hz highpass and a soft limiter; the loop never self-oscillates |
 | POSITION + CV + att. | **Spread**: distance between the L and R taps. Fully CCW = mono (R = L), noon = classic stereo (R further down the chain), fully CW = R at the chain end (S: 122 poles, L: 196 poles). Hold zones at all three positions |
-| STRUM | **Excite**: a trigger at the jack injects an impulse or a short noise burst into the chain (Rings' internal strum detection is not used here) |
+| STRUM | **Excite**: a trigger at the jack injects an impulse or a short noise burst into the chain. With STRUM **and** IN both unpatched, a V/OCT note change excites instead (as in the resonator models). Onsets of the input never excite |
 | IN | Audio input (no noise gate) |
 | ODD / EVEN | L / R. With only ODD patched, Rings mixes both outputs in hardware [manual]; L and R are the same chain at different taps, so the mono sum has comb notches and sounds thinner — turn POSITION fully CCW for a clean mono signal |
 

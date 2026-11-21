@@ -292,9 +292,14 @@ void CvScaler::ReadSchliere(
   p->spread = patch.position;
   p->mix = 1.0f - 0.25f * static_cast<float>(state.schliere_dry_steps);
   
-  // Only a trigger at the STRUM jack excites: Rings' internal strum would
-  // fire on every transient of the input.
-  p->excite = performance_state.strum && !performance_state.internal_strum;
+  // A trigger at the STRUM jack excites. With STRUM unpatched, Rings' internal
+  // strum (see Strummer) fires on a V/OCT note change or, with V/OCT
+  // unpatched, on every onset of the input. Keep only the note change, and
+  // only while IN is unpatched too: with IN patched, the internal strum would
+  // add transients to the signal being processed.
+  p->excite = performance_state.strum && (
+      !performance_state.internal_strum ||
+      performance_state.internal_exciter);
   p->excite_type = (state.schliere_options & kSchliereOptionNoiseBurst)
       ? SCHLIERE_EXCITE_NOISE_BURST
       : SCHLIERE_EXCITE_IMPULSE;

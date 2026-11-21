@@ -124,9 +124,15 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
     for (size_t i = 0; i < size; ++i) {
       in[i] = static_cast<float>(input[i].r) / 32768.0f;
     }
+    // No input for the strummer: with STRUM unpatched it only reacts to V/OCT
+    // note changes, never to onsets of the signal being processed (and it
+    // replaces the probe pattern the unpatched STRUM jack reads).
+    strummer.Process(NULL, size, &performance_state);
     SchliereParameters schliere_parameters;
     cv_scaler.ReadSchliere(
         patch, performance_state, settings.state(), &schliere_parameters);
+    // The STRUM LED flag shows only what excites the chain.
+    performance_state.strum = schliere_parameters.excite;
     if (ui.TakeSchliereExciteRequest()) {
       schliere_parameters.excite = true;  // right button
     }
