@@ -82,10 +82,13 @@ An equivalence test against the original OWL patch lives in the workbench repo
 LED 1 in the Schliere bank, and a benchmark mode that blinks the load in percent (see the
 comments there).
 
-Measured on the module (2026-11-20, peaks, knobs at noon): grounded models 43 %; Schliere
-81 % at 48 kHz, 89 % with the 96 kHz feedback path; base load without the DSP 13 %. The flash
-prefetch (enabled at boot, not set by `SystemInit`) saved about 10 %; running Schliere from RAM
-was 18 % slower and is not used.
+Measured on the module (2026-11-21, benchmark build, peaks): Schliere 59 % at 48 kHz, 69 %
+with the 96 kHz feedback path (v0.1.0: 81 % / 89 %); base load without the DSP 13 %; grounded
+models 71–84 % depending on the model (stock code). The flash prefetch (enabled at boot, not
+set by `SystemInit`) saved about 10 %; running Schliere from RAM was 18 % slower and is not
+used. The Schliere chain is unrolled straight-line code and limited by instruction fetch from
+flash: a stage with one fused multiply-add (4 bytes shorter) measured faster than the
+cycle-optimal one without.
 
 ## Differences from the stock firmware
 

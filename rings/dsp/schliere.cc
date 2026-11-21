@@ -28,8 +28,20 @@
 
 // The Rings makefile builds with -fno-move-loop-invariants; for the chain
 // loop that rematerializes constants in every stage.
+// No automatic fused multiply-add: on the Cortex-M4 vfma takes 3 cycles and
+// stalls the next dependent operation, vmul + vadd take 2 (cycle model: 72 ->
+// 65 % of the block budget). Rounding differs by at most 1.5e-6. The one
+// explicit fused operation in Stage() is deliberate (see there).
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize("move-loop-invariants")
+#pragma GCC optimize("fp-contract=off")
+#endif
+
+// Forced inlining for the helpers of the per-sample code.
+#if defined(__GNUC__)
+#define SCHLIERE_INLINE inline __attribute__((always_inline))
+#else
+#define SCHLIERE_INLINE inline
 #endif
 
 #include <cmath>
@@ -55,6 +67,9 @@ const float kFrequencyMax = 20000.0f;
 const float kFeedbackMax = 0.97f;  // only reachable with CV
 const float kFeedbackKnee = 0.9f;
 const float kHold = 0.15f;  // hold zone per side, fraction of the detent spacing
+// Reciprocal of the crossfade width: multiplied per sample instead of a
+// division (rounding differs by at most 1.2e-6).
+const float kCrossfadeScale = 1.0f / (1.0f - 2.0f * kHold);
 const float kSmoothTime = 0.010f;  // knob smoothing, 10 ms
 const float kTapWeightHz = 3000.0f;  // per pole (two poles)
 const float kLoopHighpassHz = 10.0f;
@@ -71,19 +86,7 @@ const float kBurstLowpassHz = 4000.0f;
 
 const uint8_t kTapsL[kSchliereTaps] = { 1, 9, 17, 25, 33, 41, 49 };
 const uint8_t kTapsR[kSchliereTaps] = { 1, 11, 21, 31, 41, 51, 61 };
-
-// All nodes read by the taps (union of L, R and the chain end), ascending.
-const size_t kNumTappedNodes = 12;
-const uint8_t kTappedNodes[kNumTappedNodes] = {
-  1, 9, 11, 17, 21, 25, 31, 33, 41, 49, 51, 61
-};
-
-// Halfband coefficients (Valenzuela/Constantinides, elliptic, transition
-// 0.045): flat to 20 kHz, at least 77 dB stopband from 28 kHz.
-const float kHalfbandCoefficients[6] = {
-  0.06396838f, 0.22734146f, 0.42965512f,
-  0.62193724f, 0.78589107f, 0.92904445f
-};
+const uint32_t kAllTaps = (1u << kSchliereTaps) - 1;
 
 inline float Clamp(float x, float lo, float hi) {
   return x < lo ? lo : (x > hi ? hi : x);
@@ -117,11 +120,49 @@ inline float LowpassCoefficient(float hz, float sample_rate) {
 // One stage: trapezoidal state variable filter, allpass = x - c * bandpass.
 // g2 = 2 g: the second integrator update 2 (s1 + g v1) - s1 is folded into
 // s1 + 2 g v1 (algebraically identical, one operation less).
-inline float Stage(float x, float* s, float a1, float a2, float g2, float c) {
+// The output update is one fused multiply-add (vfms): slower in the cycle
+// model, but 4 bytes shorter per stage. The unrolled chain is limited by
+// instruction fetch from flash, and on the module the shorter stage wins:
+// 59 instead of 61 % (48 kHz), 69 instead of 72 % (96 kHz) [measured, diag7,
+// flash log 2026-11-21]. Rounding differs by at most 1.2e-6.
+SCHLIERE_INLINE float Stage(
+    float x, float* s, float a1, float a2, float g2, float c) {
   float v1 = a1 * s[0] + a2 * (x - s[1]);
   s[0] = 2.0f * v1 - s[0];
   s[1] += g2 * v1;
-  return x - c * v1;
+  return __builtin_fmaf(-c, v1, x);
+}
+
+// Stages [from, to) of the chain. Called with constant bounds only.
+SCHLIERE_INLINE float Stages(
+    float x, float* s, size_t from, size_t to,
+    float a1, float a2, float g2, float c) {
+  for (size_t n = from; n < to; ++n) {
+    x = Stage(x, s + 2 * n, a1, a2, g2, c);
+  }
+  return x;
+}
+
+// The chain of kSchliereStages stages. Only the nodes read by the taps are
+// stored: 1, 9, 11, 17, 21, 25, 31, 33, 41, 49, 51, 61 (union of kTapsL,
+// kTapsR and the chain end). Written out with constant segment ends instead
+// of looping over a node table, so that GCC unrolls the chain completely
+// (cycle model: 18.5 instead of 29 cycles per stage).
+SCHLIERE_INLINE void Chain(
+    float x, float* s, float* node, float a1, float a2, float g2, float c) {
+  node[0] = x;
+  node[1] = x = Stages(x, s, 0, 1, a1, a2, g2, c);
+  node[9] = x = Stages(x, s, 1, 9, a1, a2, g2, c);
+  node[11] = x = Stages(x, s, 9, 11, a1, a2, g2, c);
+  node[17] = x = Stages(x, s, 11, 17, a1, a2, g2, c);
+  node[21] = x = Stages(x, s, 17, 21, a1, a2, g2, c);
+  node[25] = x = Stages(x, s, 21, 25, a1, a2, g2, c);
+  node[31] = x = Stages(x, s, 25, 31, a1, a2, g2, c);
+  node[33] = x = Stages(x, s, 31, 33, a1, a2, g2, c);
+  node[41] = x = Stages(x, s, 33, 41, a1, a2, g2, c);
+  node[49] = x = Stages(x, s, 41, 49, a1, a2, g2, c);
+  node[51] = x = Stages(x, s, 49, 51, a1, a2, g2, c);
+  node[61] = Stages(x, s, 51, 61, a1, a2, g2, c);
 }
 
 // Resonance knob -> ln(Q): straight lines between Q 0.01 / 0.026 / 0.51 /
@@ -137,7 +178,7 @@ inline float LnQ(float knob) {
 
 // Crossfade position between two detents: hold zone, then linear or S-curve.
 inline float Crossfade(float fraction, bool linear) {
-  float t = Clamp((fraction - kHold) / (1.0f - 2.0f * kHold), 0.0f, 1.0f);
+  float t = Clamp((fraction - kHold) * kCrossfadeScale, 0.0f, 1.0f);
   return linear ? t : t * t * (3.0f - 2.0f * t);
 }
 
@@ -154,16 +195,6 @@ void SchliereHalfband::Init() {
   for (int32_t i = 0; i < kNumCoefficients; ++i) {
     x_[i] = y_[i] = 0.0f;
   }
-}
-
-SCHLIERE_RAM_CODE float SchliereHalfband::Branch(float x, int32_t first) {
-  for (int32_t i = first; i < kNumCoefficients; i += 2) {
-    float y = kHalfbandCoefficients[i] * (x - y_[i]) + x_[i];
-    x_[i] = x;
-    y_[i] = y;
-    x = y;
-  }
-  return x;
 }
 
 void Schliere::Init(SchliereVariant variant) {
@@ -215,6 +246,7 @@ void Schliere::Init(SchliereVariant variant) {
   burst_lp_coefficient_ = 1.0f - expf(
       -2.0f * kPi * kBurstLowpassHz / kSampleRate);
 
+  tap_active_ = kAllTaps;
   rng_state_ = 0x21436587;
   limiter_blocks_ = 0;
   tap_detent_ = 0;
@@ -252,14 +284,16 @@ void Schliere::ComputeCoefficients(
   *k = expf(-LnQ(knob_q));
 }
 
-SCHLIERE_RAM_CODE float Schliere::FeedbackAmount(float knob_plus_cv) const {
+// FeedbackAmount(), ChainInput() and ChainInputOversampled() are forced
+// inline: they run once per sample, and inlined, the halfband loops unroll.
+SCHLIERE_INLINE float Schliere::FeedbackAmount(float knob_plus_cv) const {
   return kFeedbackMax * (switches_.hard_feedback_limit
       ? Clamp(knob_plus_cv, -1.0f, 1.0f)
       : Soft(knob_plus_cv, kFeedbackKnee, 1.0f));
 }
 
 // Chain input at 48 kHz: input and feedback loop.
-SCHLIERE_RAM_CODE float Schliere::ChainInput(float in, float cv) {
+SCHLIERE_INLINE float Schliere::ChainInput(float in, float cv) {
   float fb = FeedbackAmount(feedback_ + cv);
   if (feedback_g_ > 0.0f) {
     fb = Lowpass(Lowpass(fb, &feedback_lp_[0], feedback_g_),
@@ -272,7 +306,7 @@ SCHLIERE_RAM_CODE float Schliere::ChainInput(float in, float cv) {
 // Chain input at 96 kHz: input, CV and loop are upsampled, the feedback
 // product is formed there, then the result is decimated. Sum frequencies
 // above 24 kHz then fall into the decimation filter instead of folding back.
-SCHLIERE_RAM_CODE float Schliere::ChainInputOversampled(float in, float cv) {
+SCHLIERE_INLINE float Schliere::ChainInputOversampled(float in, float cv) {
   float in_2x[2] = { up_in_.Branch(in, 0), up_in_.Branch(in, 1) };
   // The CV only moves at block rate (ramped): linear interpolation is enough
   // instead of a third halfband. (The OWL version upsampled an audio-rate
@@ -400,6 +434,16 @@ SCHLIERE_RAM_CODE void Schliere::Process(
       burst_level_ = 1.0f;
     }
   }
+  // An excitation can only start here, at a block boundary: when none is
+  // pending or still decaying, skip Excitation() for the whole block.
+  const bool exciting = impulse_pending_ || burst_level_ > 1.0e-4f;
+  if (!exciting) {
+    burst_lp_ = 0.0f;
+  }
+
+  // Taps with a non-zero smoothed weight; the others are skipped.
+  uint32_t tap_active = first ? kAllTaps : tap_active_;
+  const bool smooth_tap_weights = switches_.smooth_tap_weights;
 
   loop_peak_ = 0.0f;
   for (size_t i = 0; i < size; ++i) {
@@ -421,19 +465,11 @@ SCHLIERE_RAM_CODE void Schliere::Process(
     float x = switches_.oversampled_feedback
         ? ChainInputOversampled(in[i], feedback_cv)
         : ChainInput(in[i], feedback_cv);
-    x += Excitation();
-
-    // The chain. Only the nodes read by the taps are stored.
-    node_[0] = x;
-    float* s = state_;
-    size_t n = 0;
-    for (size_t j = 0; j < kNumTappedNodes; ++j) {
-      size_t end = kTappedNodes[j];
-      for (; n < end; ++n, s += 2) {
-        x = Stage(x, s, a1, a2, g2, c);
-      }
-      node_[end] = x;
+    if (exciting) {
+      x += Excitation();
     }
+
+    Chain(x, state_, node_, a1, a2, g2, c);
     a1 += a1_step;
     a2 += a2_step;
 
@@ -447,16 +483,25 @@ SCHLIERE_RAM_CODE void Schliere::Process(
     float t = Crossfade(u - index, switches_.linear_crossfade);
     float left = 0.0f;
     float right_classic = 0.0f;
-    for (int32_t j = 0; j < static_cast<int32_t>(kSchliereTaps); ++j) {
+    // Visit only the two taps under the knob and those whose weight still
+    // decays, in ascending order (same summation order as a full loop).
+    uint32_t pending = smooth_tap_weights
+        ? tap_active | (3u << index)
+        : 3u << index;
+    while (pending) {
+      int32_t j = __builtin_ctz(pending);
+      pending &= pending - 1;
       float w = j == index ? 1.0f - t : (j == index + 1 ? t : 0.0f);
-      if (switches_.smooth_tap_weights) {
+      if (smooth_tap_weights) {
         float* lp = tap_lp_[j];
         if (first) {
           lp[0] = lp[1] = w;
         }
         if (w == 0.0f && lp[0] == 0.0f && lp[1] == 0.0f) {
+          tap_active &= ~(1u << j);
           continue;  // inactive tap, settled
         }
+        tap_active |= 1u << j;
         w = Lowpass(Lowpass(w, &lp[0], tap_weight_g_), &lp[1], tap_weight_g_);
         if (fabsf(lp[0]) < 1.0e-7f && fabsf(lp[1]) < 1.0e-7f &&
             fabsf(w) < 1.0e-7f) {
@@ -497,6 +542,7 @@ SCHLIERE_RAM_CODE void Schliere::Process(
     out_l[i] = Soft(dry + mix_ * left, kOutKnee, kOutCeiling);
     out_r[i] = Soft(dry + mix_ * right, kOutKnee, kOutCeiling);
   }
+  tap_active_ = tap_active;
 
   // Garbage in the state (should never happen): silence and start over.
   if (Broken()) {

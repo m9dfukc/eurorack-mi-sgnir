@@ -27,19 +27,17 @@
 //
 // SCHLIERE_CPU_METER: in the Schliere bank, LED 1 shows the load of the last
 // second (green < 60 %, yellow < 80 %, red < 95 %, red blinking above)
-// instead of the limiter, and the right button (short) toggles the 96 kHz
-// feedback path (LED 2 green = on, yellow = off) instead of the excite
-// flavor.
+// instead of the limiter. The buttons work as in the release.
 //
 // SCHLIERE_BENCHMARK (needs SCHLIERE_CPU_METER): in the Schliere bank,
 // Schliere runs only on every 16th block (audio passes dry), so the module
-// is never overloaded. In every bank the LEDs blink the load in percent of
-// the block budget: 1.5 s off, LED 1 red = tens, 1 s off, LED 2 green = ones
-// (a digit 0 = one yellow blink), 2 s status (LED 1: bank green / yellow, or
-// prefetch red = off / yellow = on in the Schliere bank; LED 2: 96 kHz path
-// green = on / yellow = off / red = base load only). In the Schliere bank,
-// right short cycles 96 kHz on -> off -> base load only, left short toggles
-// the flash prefetch.
+// is never overloaded. In every bank the LEDs blink the peak load in percent
+// of the block budget: 1.5 s off, LED 1 red = tens, 1 s off, LED 2 green =
+// ones (a digit 0 = one yellow blink), 2 s status. Status LED 1: bank green
+// = grounded / yellow = bonus models / red = Schliere. Status LED 2: 96 kHz
+// path green = on / yellow = off, red = base load only. In the Schliere
+// bank, left short toggles base load only (instead of dry/wet); the right
+// button works as in the release.
 
 #ifndef RINGS_DIAGNOSTICS_H_
 #define RINGS_DIAGNOSTICS_H_

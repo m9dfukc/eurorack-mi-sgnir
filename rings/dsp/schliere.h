@@ -86,7 +86,24 @@ struct SchliereParameters {
 class SchliereHalfband {
  public:
   void Init();
-  SCHLIERE_RAM_CODE float Branch(float x, int32_t first);
+
+  // Defined here so that it inlines into the per-sample code, where `first`
+  // is a constant and the loop unrolls. Coefficients: Valenzuela/
+  // Constantinides, elliptic, transition 0.045; flat to 20 kHz, at least
+  // 77 dB stopband from 28 kHz.
+  inline float Branch(float x, int32_t first) {
+    static const float coefficients[kNumCoefficients] = {
+      0.06396838f, 0.22734146f, 0.42965512f,
+      0.62193724f, 0.78589107f, 0.92904445f
+    };
+    for (int32_t i = first; i < kNumCoefficients; i += 2) {
+      float y = coefficients[i] * (x - y_[i]) + x_[i];
+      x_[i] = x;
+      y_[i] = y;
+      x = y;
+    }
+    return x;
+  }
 
  private:
   static const int32_t kNumCoefficients = 6;
@@ -136,9 +153,9 @@ class Schliere {
   void Reset();
   void ComputeCoefficients(float knob_f, float knob_q, float octaves,
                            float* g, float* k) const;
-  SCHLIERE_RAM_CODE float FeedbackAmount(float knob_plus_cv) const;
-  SCHLIERE_RAM_CODE float ChainInput(float in, float cv);
-  SCHLIERE_RAM_CODE float ChainInputOversampled(float in, float cv);
+  float FeedbackAmount(float knob_plus_cv) const;
+  float ChainInput(float in, float cv);
+  float ChainInputOversampled(float in, float cv);
   SCHLIERE_RAM_CODE float Excitation();
   void UpdateTapDetent();
   bool Broken() const;
@@ -189,6 +206,10 @@ class Schliere {
   int32_t limiter_blocks_;
   int32_t tap_detent_;
   bool primed_;
+
+  // Bit j set: tap j has a non-zero smoothed weight. (At the end of the
+  // class, so the offsets of the members above stay as they were.)
+  uint32_t tap_active_;
 
   DISALLOW_COPY_AND_ASSIGN(Schliere);
 };
