@@ -39,13 +39,16 @@
 // - Knobs and CVs arrive once per block; CVs are ramped over the block.
 // - No CV dead zone (Rings has calibrated CV offsets and attenuverters).
 // - tanh() in the soft knees is replaced by stmlib's SoftClip().
-// - Spread (R tap distance), excite (STRUM) and dry/wet mix are new.
+// - Spread (R tap distance), excite (STRUM: impulse, mallet, ping) and
+//   dry/wet mix are new.
 // - Two outputs (L, R) instead of four (no diff and tail outputs).
 
 #ifndef RINGS_DSP_SCHLIERE_H_
 #define RINGS_DSP_SCHLIERE_H_
 
 #include "stmlib/stmlib.h"
+
+#include "rings/dsp/dsp.h"
 
 // Optional placement of the per-sample code, e.g.
 // __attribute__((section(".ramtext"), long_call)) for RAM.
@@ -75,9 +78,14 @@ enum SchliereVariant {
   SCHLIERE_VARIANT_A,  // original: hard edges, no smoothing
 };
 
+// Excitation on a STRUM trigger. Mallet and ping follow the chain's
+// frequency (and the ping its resonance), so their energy lands where the
+// chain delays: at and below FREQUENCY (research note
+// docs/research/notes/excite-signals-2026-11-21.md in the workbench).
 enum SchliereExcite {
-  SCHLIERE_EXCITE_IMPULSE,
-  SCHLIERE_EXCITE_NOISE_BURST,
+  SCHLIERE_EXCITE_IMPULSE,  // single sample: bright click, then the chirp
+  SCHLIERE_EXCITE_MALLET,  // Hann pulse, one period of FREQUENCY long
+  SCHLIERE_EXCITE_PING,  // Hann-windowed sine at FREQUENCY, about 2 Q cycles
 };
 
 struct SchliereParameters {
@@ -163,6 +171,11 @@ class Schliere {
   // Follows the knob only, not the CV.
   inline int32_t tap_detent() const { return tap_detent_; }
 
+  // Random micro-variation of every excitation (level +-1 dB, polarity,
+  // mallet width / ping length +-10 %), against identical repeated hits.
+  // On after Init(); the host tests switch it off.
+  inline void set_excite_variation(bool on) { excite_variation_ = on; }
+
  private:
   struct Switches {
     bool linear_crossfade;
@@ -188,7 +201,8 @@ class Schliere {
   float FeedbackAmount(float knob_plus_cv) const;
   float ChainInput(float in, float cv);
   float ChainInputOversampled(float in, float cv);
-  SCHLIERE_RAM_CODE float Excitation();
+  void StartExcitation(SchliereExcite type, float g, float k);
+  bool RenderExcitation(size_t size);
   // The sample loop, one instance per chain layout (Layout: see schliere.cc).
   template<typename Layout>
   void Run(const SchliereParameters& parameters, const float* in,
@@ -226,11 +240,19 @@ class Schliere {
   float down_odd_;
   float cv_previous_;
 
-  // Excitation.
-  float burst_level_;
-  float burst_lp_;
+  // Excitation: one generator, a retrigger restarts it. The Hann window
+  // 0.5 (1 - cos(n theta)) and the ping's sine run as recursions, so no trig
+  // call per sample.
+  SchliereExcite excite_type_;
+  int32_t excite_remaining_;  // samples left, 0 = idle
+  float excite_amplitude_;
+  float window_cos_;  // cos(n theta)
+  float window_cos_previous_;  // cos((n - 1) theta)
+  float window_cos_theta_x2_;  // 2 cos(theta)
+  float ping_cos_, ping_sin_;  // cos / sin(n omega0)
+  float ping_rotation_cos_, ping_rotation_sin_;
   uint32_t rng_state_;
-  bool impulse_pending_;
+  bool excite_variation_;
 
   // Precomputed filter and slew coefficients.
   float loop_hp_;
@@ -240,8 +262,6 @@ class Schliere {
   float slew_sample_;
   float slew_block_;
   size_t slew_block_size_;
-  float burst_decay_;
-  float burst_lp_coefficient_;
 
   int32_t limiter_blocks_;
   int32_t tap_detent_;
@@ -259,6 +279,10 @@ class Schliere {
   // Chain output of the last sample (the taps' nodes live on the stack in
   // Run(), they are only needed within one sample).
   float chain_end_;
+
+  // The excitation of the current block, rendered before the sample loop:
+  // the loop only adds it, the unrolled chain stays untouched.
+  float excite_buffer_[kMaxBlockSize];
 
   DISALLOW_COPY_AND_ASSIGN(Schliere);
 };

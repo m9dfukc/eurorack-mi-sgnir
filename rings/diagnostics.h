@@ -37,7 +37,9 @@
 // = grounded / yellow = bonus models / red = Schliere. Status LED 2: the
 // Schliere variant, green = S 48 kHz / yellow = S 96 kHz / red = L; off =
 // base load only. In the Schliere bank, left short toggles base load only
-// (instead of dry/wet); the right button works as in the release.
+// (instead of dry/wet); the right button works as in the release. A trigger
+// (STRUM, note change, right button) is kept until the next measured block,
+// so the excitation is measured too; it then plays 16 times slower.
 
 #ifndef RINGS_DIAGNOSTICS_H_
 #define RINGS_DIAGNOSTICS_H_

@@ -300,9 +300,7 @@ void CvScaler::ReadSchliere(
   p->excite = performance_state.strum && (
       !performance_state.internal_strum ||
       performance_state.internal_exciter);
-  p->excite_type = (state.schliere_options & kSchliereOptionNoiseBurst)
-      ? SCHLIERE_EXCITE_NOISE_BURST
-      : SCHLIERE_EXCITE_IMPULSE;
+  p->excite_type = SchliereExciteFromOptions(state.schliere_options);
 }
 
 }  // namespace rings

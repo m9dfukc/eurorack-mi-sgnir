@@ -85,6 +85,7 @@ comments there).
 Measured on the module (2026-11-21, benchmark builds, peaks, knobs at noon, no input):
 Schliere S 62 % at 48 kHz, 71 % with the 96 kHz feedback path (v0.1.0: 81 % / 89 %), L 82 %;
 base load without the DSP 13 %; grounded models 71–84 % depending on the model (stock code).
+A running excitation (ping, the longest flavor) adds 1–3 points: L 85 %, S 63 / 72 %.
 Each extra stage of the chain costs about 0.5 % of the block budget. The flash prefetch (enabled at boot, not
 set by `SystemInit`) saved about 10 %; running Schliere from RAM was 18 % slower and is not
 used. The Schliere chain is unrolled straight-line code and limited by instruction fetch from
@@ -155,7 +156,7 @@ models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** �
 | BRIGHTNESS + CV + att. | **Resonance** (Q 0.01 … 16): low = the bass arrives late, high = a narrow band around FREQUENCY rings on |
 | DAMPING + CV + att. | **Feedback**: knob 0 … ≈ 95 %, up to 97 % with CV (soft knee above 90 %). A negative CV inverts the loop (peaks and troughs swap). L goes back to the chain input through a 10 Hz highpass and a soft limiter; the loop never self-oscillates |
 | POSITION + CV + att. | **Spread**: distance between the L and R taps. Fully CCW = mono (R = L), noon = classic stereo (R further down the chain), fully CW = R at the chain end (S: 122 poles, L: 196 poles). Hold zones at all three positions |
-| STRUM | **Excite**: a trigger at the jack injects an impulse or a short noise burst into the chain. With STRUM **and** IN both unpatched, a V/OCT note change excites instead (as in the resonator models). Onsets of the input never excite |
+| STRUM | **Excite**: a trigger at the jack injects an excitation into the chain (flavor: left button). With STRUM **and** IN both unpatched, a V/OCT note change excites instead (as in the resonator models). Onsets of the input never excite |
 | IN | Audio input (no noise gate) |
 | ODD / EVEN | L / R. With only ODD patched, Rings mixes both outputs in hardware [manual]; L and R are the same chain at different taps, so the mono sum has comb notches and sounds thinner — turn POSITION fully CCW for a clean mono signal |
 
@@ -164,7 +165,7 @@ models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** �
 | Button | Function |
 |---|---|
 | Left, short | **Dry/wet**: 100 → 75 → 50 → 25 → 100 % wet (default 100 %). 50 % gives the deepest phaser notches |
-| Left, hold 3 s | **Excite flavor**: impulse ↔ noise burst |
+| Left, hold 3 s | **Excite flavor**: impulse → mallet → ping → impulse. *Impulse*: a single sample, bright click followed by the chirp. *Mallet*: a smooth pulse one period of FREQUENCY long, so nearly all of it lands where the chain delays (at and below FREQUENCY): almost no click, mostly chirp. *Ping*: a short sine burst at FREQUENCY, about 2 Q cycles long (3–16 cycles, ≤ 40 ms), a pitched "boing", strongest at high BRIGHTNESS. Every hit varies slightly (level ±1 dB, random polarity, mallet width / ping length ±10 %), so repeated triggers do not sound identical |
 | Right, press | **Excite** the moment the button goes down (also when it is then held) |
 | Right, hold 1–3 s | **Variant**, switched on release: S 48 kHz → S 96 kHz → L → S 48 kHz. S 48 kHz is the default; S 96 kHz is the AC/DC variant S (feedback product oversampled), audibly a bit different, ≈ 9 % more CPU. Changing between S and L fades the wet signal out, restarts the chain silent and fades back in (5 ms each way), so ringing tails are cut |
 | Right, hold 3 s | Next bank (no variant change) |
@@ -184,7 +185,7 @@ selected on release.
 
 | LED 1 | Meaning |
 |---|---|
-| green / yellow for 1.5 s after holding the left button 3 s | excite flavor: green = impulse, yellow = noise burst |
+| green / yellow / red for 1.5 s after holding the left button 3 s | excite flavor: green = impulse, yellow = mallet, red = ping |
 | red / yellow / green / off for 1.5 s after a short press of the left button | dry/wet: 100 / 75 / 50 / 25 % wet |
 | green for 1.5 s while turning STRUCTURE | the tap knob reached one of the seven detents (follows the knob only, not the CV) |
 | red, held for 0.3 s | the soft limiter in the feedback loop is working (loud input, high feedback or resonance) — not an error |
@@ -196,7 +197,9 @@ Frequency-locking preview and calibration take over both LEDs as described above
 #### Saved settings and safety
 
 Bank, dry/wet step, excite flavor and the variant are saved and survive a power cycle. After a
-rollback to v0.1.0, L becomes S 48 kHz.
+rollback to v0.1.0, L becomes S 48 kHz. After a rollback to v0.1.0 or v0.2.0, ping becomes the
+impulse and mallet becomes their noise burst (which the mallet replaced); a saved noise burst
+reads as mallet after an update.
 If Schliere ever overloads the processor (over budget for 0.2 s), the module leaves the
 Schliere bank by itself.
 

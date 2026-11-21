@@ -101,6 +101,7 @@ int32_t overload_blocks = 0;
 
 // SCHLIERE_BENCHMARK (rings/diagnostics.h): see there.
 uint32_t benchmark_counter = 0;
+bool benchmark_excite = false;
 float benchmark_l[kMaxBlockSize];
 float benchmark_r[kMaxBlockSize];
 float in_level = 0.0f;
@@ -145,7 +146,12 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
     schliere.set_oversampled_feedback(selection == SCHLIERE_SELECTION_S_96K);
     schliere.set_chain(SchliereChainFor(selection));
 #ifdef SCHLIERE_BENCHMARK
+    // Schliere runs on every 16th block only: keep a trigger until then, so
+    // that the excitation is measured too. It then plays 16 times slower.
+    benchmark_excite |= schliere_parameters.excite;
     if ((++benchmark_counter & 15) == 0) {
+      schliere_parameters.excite = benchmark_excite;
+      benchmark_excite = false;
       uint32_t t0 = DWT->CYCCNT;
       schliere.Process(
           schliere_parameters, in, benchmark_l, benchmark_r, size);

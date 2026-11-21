@@ -80,9 +80,18 @@ const float kOutCeiling = 0.98f;
 const float kLimiterHoldTime = 0.3f;
 const float kDetentHysteresis = 0.03f;
 
-const float kExciteLevel = 0.5f;  // [hypothesis] tune by ear on hardware
-const float kBurstTime = 0.003f;
-const float kBurstLowpassHz = 4000.0f;
+// Excitation, after the research note excite-signals-2026-11-21 (host
+// computation). Levels and lengths: [hypothesis], tune by ear on hardware.
+const float kExciteLevel = 0.5f;  // peak of every flavor
+const float kMalletPeriods = 1.0f;  // width in periods of FREQUENCY (0.5: harder)
+const float kMalletMinTime = 0.0001f;  // 0.1 ms
+const float kMalletMaxTime = 0.010f;  // 10 ms
+const float kPingCyclesPerQ = 2.0f;  // grain length about 2 Q cycles ...
+const float kPingMinCycles = 3.0f;
+const float kPingMaxCycles = 16.0f;
+const float kPingMaxTime = 0.040f;  // ... and at most 40 ms
+const float kVariationWidth = 0.1f;  // +-10 % width / length
+const float kVariationLevel = 0.12f;  // about +-1 dB
 
 const float kGateTime = 0.005f;  // fade out/in around a chain change
 
@@ -283,12 +292,10 @@ void Schliere::Init(SchliereVariant variant) {
   slew_sample_ = 1.0f - expf(-1.0f / (kSmoothTime * kSampleRate));
   slew_block_ = 0.0f;
   slew_block_size_ = 0;
-  burst_decay_ = expf(-1.0f / (kBurstTime * kSampleRate));
-  burst_lp_coefficient_ = 1.0f - expf(
-      -2.0f * kPi * kBurstLowpassHz / kSampleRate);
 
   tap_active_ = kAllTaps;
   rng_state_ = 0x21436587;
+  excite_variation_ = true;
   limiter_blocks_ = 0;
   tap_detent_ = 0;
   primed_ = false;
@@ -311,9 +318,12 @@ void Schliere::Reset() {
   loop_state_ = 0.0f;
   loop_peak_ = 0.0f;
   feedback_now_ = 0.0f;
-  burst_level_ = 0.0f;
-  burst_lp_ = 0.0f;
-  impulse_pending_ = false;
+  excite_type_ = SCHLIERE_EXCITE_IMPULSE;
+  excite_remaining_ = 0;
+  excite_amplitude_ = 0.0f;
+  window_cos_ = window_cos_previous_ = window_cos_theta_x2_ = 0.0f;
+  ping_cos_ = ping_sin_ = 0.0f;
+  ping_rotation_cos_ = ping_rotation_sin_ = 0.0f;
 }
 
 void Schliere::ComputeCoefficients(
@@ -369,22 +379,86 @@ SCHLIERE_INLINE float Schliere::ChainInputOversampled(float in, float cv) {
   return y;
 }
 
-SCHLIERE_RAM_CODE float Schliere::Excitation() {
-  float e = 0.0f;
-  if (impulse_pending_) {
-    e += kExciteLevel;
-    impulse_pending_ = false;
-  }
-  if (burst_level_ > 1.0e-4f) {
+// Once per trigger, at a block boundary. g and k: the chain's coefficients
+// at the end of this block. A retrigger restarts the generator.
+void Schliere::StartExcitation(SchliereExcite type, float g, float k) {
+  float u_width = 0.0f;
+  float u_level = 0.0f;
+  float sign = 1.0f;
+  if (excite_variation_) {
     rng_state_ = rng_state_ * 1664525u + 1013904223u;
-    float noise = static_cast<float>(rng_state_ >> 8) / 8388608.0f - 1.0f;
-    burst_lp_ += burst_lp_coefficient_ * (noise * burst_level_ - burst_lp_);
-    burst_level_ *= burst_decay_;
-    e += kExciteLevel * burst_lp_;
-  } else {
-    burst_lp_ = 0.0f;
+    u_width = static_cast<float>(rng_state_ >> 8) / 8388608.0f - 1.0f;
+    rng_state_ = rng_state_ * 1664525u + 1013904223u;
+    u_level = static_cast<float>(rng_state_ >> 8) / 8388608.0f - 1.0f;
+    rng_state_ = rng_state_ * 1664525u + 1013904223u;
+    sign = (rng_state_ & 0x80000000u) ? -1.0f : 1.0f;
   }
-  return e;
+  excite_type_ = type;
+  excite_amplitude_ = sign * kExciteLevel * (1.0f + kVariationLevel * u_level);
+  if (type == SCHLIERE_EXCITE_IMPULSE) {
+    excite_remaining_ = 1;
+    return;
+  }
+
+  // The chain's center frequency, exact for its trapezoidal tuning.
+  float omega0 = 2.0f * atanf(g);  // rad per sample
+  float period = 2.0f * kPi / omega0;  // samples
+  float width = 1.0f + kVariationWidth * u_width;
+  float length;  // samples
+  if (type == SCHLIERE_EXCITE_MALLET) {
+    length = Clamp(kMalletPeriods * period * width,
+                   kMalletMinTime * kSampleRate,
+                   kMalletMaxTime * kSampleRate);
+  } else {
+    float cycles = Clamp(kPingCyclesPerQ / k, kPingMinCycles, kPingMaxCycles);
+    length = cycles * width * period;
+    if (length > kPingMaxTime * kSampleRate) {
+      length = kPingMaxTime * kSampleRate;
+    }
+    // cos / sin(omega0) from g = tan(omega0 / 2): no trig call.
+    float g_squared = g * g;
+    float scale = 1.0f / (1.0f + g_squared);
+    ping_rotation_cos_ = (1.0f - g_squared) * scale;
+    ping_rotation_sin_ = 2.0f * g * scale;
+    ping_cos_ = 1.0f;
+    ping_sin_ = 0.0f;
+  }
+  // Hann window 0.5 (1 - cos(n theta)) over n = 0 .. length.
+  float cos_theta = cosf(2.0f * kPi / length);
+  window_cos_ = 1.0f;
+  window_cos_previous_ = cos_theta;
+  window_cos_theta_x2_ = 2.0f * cos_theta;
+  excite_remaining_ = static_cast<int32_t>(length) + 1;
+}
+
+// Renders the excitation of this block into excite_buffer_. False when
+// idle: the sample loop then skips it.
+bool Schliere::RenderExcitation(size_t size) {
+  if (excite_remaining_ <= 0) {
+    return false;
+  }
+  for (size_t i = 0; i < size; ++i) {
+    float e = 0.0f;
+    if (excite_remaining_ > 0) {
+      if (excite_type_ == SCHLIERE_EXCITE_IMPULSE) {
+        e = excite_amplitude_;
+      } else {
+        float c = window_cos_;
+        window_cos_ = window_cos_theta_x2_ * c - window_cos_previous_;
+        window_cos_previous_ = c;
+        e = excite_amplitude_ * (0.5f - 0.5f * c);
+        if (excite_type_ == SCHLIERE_EXCITE_PING) {
+          e *= ping_sin_;
+          float pc = ping_cos_;
+          ping_cos_ = pc * ping_rotation_cos_ - ping_sin_ * ping_rotation_sin_;
+          ping_sin_ = ping_sin_ * ping_rotation_cos_ + pc * ping_rotation_sin_;
+        }
+      }
+      --excite_remaining_;
+    }
+    excite_buffer_[i] = e;
+  }
+  return true;
 }
 
 void Schliere::UpdateTapDetent() {
@@ -453,7 +527,7 @@ SCHLIERE_INLINE void Schliere::Run(
         ? ChainInputOversampled(in[i], feedback_cv)
         : ChainInput(in[i], feedback_cv);
     if (exciting) {
-      x += Excitation();
+      x += excite_buffer_[i];
     }
 
     Layout::Chain(x, state_, node, a1, a2, g2, c);
@@ -627,19 +701,12 @@ SCHLIERE_RAM_CODE void Schliere::Process(
 
   gate_step_ = (gate_end - gate_) * inverse_size;
 
+  // An excitation can only start here, at a block boundary. Rendered for
+  // the whole block before the sample loop; skipped there when idle.
   if (p.excite) {
-    if (p.excite_type == SCHLIERE_EXCITE_IMPULSE) {
-      impulse_pending_ = true;
-    } else {
-      burst_level_ = 1.0f;
-    }
+    StartExcitation(p.excite_type, g_target, k_target);
   }
-  // An excitation can only start here, at a block boundary: when none is
-  // pending or still decaying, skip Excitation() for the whole block.
-  b.exciting = impulse_pending_ || burst_level_ > 1.0e-4f;
-  if (!b.exciting) {
-    burst_lp_ = 0.0f;
-  }
+  b.exciting = RenderExcitation(size);
 
   b.tap_active = first ? kAllTaps : tap_active_;
   b.first = first;

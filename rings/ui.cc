@@ -182,13 +182,17 @@ void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
     }
   }
   
-  // LED 1: excite flavor after a long press of the left button (green =
-  // impulse, yellow = noise burst), dry/wet step after a short press (100 /
-  // 75 / 50 / 25 % wet = red / yellow / green / off), tap reaching a detent
-  // (green), or the loop limiter at work (red).
+  // LED 1: excite flavor after a long press of the left button (green /
+  // yellow / red = impulse / mallet / ping), dry/wet step after a short
+  // press (100 / 75 / 50 / 25 % wet = red / yellow / green / off), tap
+  // reaching a detent (green), or the loop limiter at work (red).
   if (excite_display_time_ &&
       now - excite_display_time_ < kSchliereDisplayDuration) {
-    leds_.set(0, settings_->schliere_option(kSchliereOptionNoiseBurst), true);
+    switch (settings_->schliere_excite()) {
+      case SCHLIERE_EXCITE_IMPULSE: leds_.set(0, false, true); break;
+      case SCHLIERE_EXCITE_MALLET: leds_.set(0, true, true); break;
+      default: leds_.set(0, true, false); break;
+    }
   } else if (mix_display_time_ &&
              now - mix_display_time_ < kSchliereDisplayDuration) {
     // Wet share: red / yellow / green / off = 100 / 75 / 50 / 25 % wet.
@@ -467,7 +471,7 @@ void Ui::OnSwitchReleased(const Event& e) {
           AnimateEasterEggLeds();
         } else if (settings_->state().schliere) {
           // Excite flavor (polyphony has no meaning in the Schliere bank).
-          settings_->ToggleSchliereOption(kSchliereOptionNoiseBurst);
+          settings_->NextSchliereExcite();
           excite_display_time_ = system_clock.milliseconds() | 1;
         } else {
           part_->set_polyphony(3);

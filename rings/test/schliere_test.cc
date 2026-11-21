@@ -529,6 +529,7 @@ int main() {
     // run the input through the 96 kHz halfbands, the excitation not.
     static Schliere s;
     s.Init(Z);
+    s.set_excite_variation(false);
     SchliereParameters p = Settings(1000, 0.8, 5, 0);
     const size_t trigger = 10 * kBlock;
     Out e = Run(&s, p, 8192, [](size_t) { return 0.0; },
@@ -541,16 +542,86 @@ int main() {
     check("excite impulse = input impulse of 0.5 at the trigger", d < 1e-6 && Peak(e.l) > 0.01, d, Peak(e.l));
   }
   {
-    static Schliere s;
-    s.Init(S);
-    SchliereParameters p = Settings(1000, 0.5, 1, 0);
-    p.excite_type = SCHLIERE_EXCITE_NOISE_BURST;
+    // Mallet and ping = the textbook signal at the input (Z, feedback 0,
+    // no variation): mallet a Hann pulse one period of FREQUENCY (1 kHz,
+    // 48 samples) long, ping a Hann-windowed sine at FREQUENCY over 2 Q
+    // cycles (resonance 0.75: Q 3.81, 7.62 cycles = 365.8 samples).
     const size_t trigger = 10 * kBlock;
-    Out o = Run(&s, p, 48000, [](size_t) { return 0.0; },
-                [&](SchliereParameters* q, size_t t) { q->excite = t == trigger; });
-    double burst = Peak(o.l, trigger, trigger + 480);
-    double after = Peak(o.l, trigger + 2400);
-    check("excite noise burst: audible, then silent after 50 ms (peak, after)", Finite(o) && burst > 0.05 && after < 1e-4, burst, after);
+    const double w0 = 2 * PI * 1000 / FS;
+    const double ping_length = 2 * std::exp(1.3376292) * 2 * PI / w0;
+    struct Case {
+      SchliereExcite type;
+      const char* name;
+      double length;
+      bool sine;
+    } cases[2] = {
+      { SCHLIERE_EXCITE_MALLET, "excite mallet = input Hann pulse of 1/f0 at the trigger", 48.0, false },
+      { SCHLIERE_EXCITE_PING, "excite ping = input Hann-windowed sine, 2 Q cycles of f0", ping_length, true },
+    };
+    for (const Case& c : cases) {
+      static Schliere s;
+      s.Init(Z);
+      s.set_excite_variation(false);
+      SchliereParameters p = Settings(1000, 0.75, 5, 0);
+      p.excite_type = c.type;
+      Out e = Run(&s, p, 8192, [](size_t) { return 0.0; },
+                  [&](SchliereParameters* q, size_t t) { q->excite = t == trigger; });
+      static Schliere r;
+      r.Init(Z);
+      Out i = Run(&r, p, 8192, [&](size_t t) {
+        if (t < trigger || t - trigger > c.length) return 0.0;
+        const double n = static_cast<double>(t - trigger);
+        const double w = 0.25 * (1 - std::cos(2 * PI * n / c.length));
+        return c.sine ? w * std::sin(w0 * n) : w;
+      });
+      double d = 0;
+      for (size_t n = 0; n < e.l.size(); ++n) d = std::fmax(d, std::fabs(e.l[n] - i.l[n]));
+      check(c.name, d < 1e-4 && Peak(e.l) > 0.01, d, Peak(e.l));
+    }
+  }
+  {
+    // Every flavor (variation on) ends: silent 50 ms after the trigger.
+    const SchliereExcite types[3] = {
+      SCHLIERE_EXCITE_IMPULSE, SCHLIERE_EXCITE_MALLET, SCHLIERE_EXCITE_PING
+    };
+    double worst_peak = 1e9, worst_after = 0;
+    for (SchliereExcite type : types) {
+      static Schliere s;
+      s.Init(S);
+      SchliereParameters p = Settings(1000, 0.5, 1, 0);
+      p.excite_type = type;
+      const size_t trigger = 10 * kBlock;
+      Out o = Run(&s, p, 48000, [](size_t) { return 0.0; },
+                  [&](SchliereParameters* q, size_t t) { q->excite = t == trigger; });
+      worst_peak = std::fmin(worst_peak, Peak(o.l, trigger, trigger + 480));
+      worst_after = std::fmax(worst_after, Peak(o.l, trigger + 2400));
+      if (!Finite(o)) worst_peak = 0;
+    }
+    check("excite, every flavor: audible, then silent after 50 ms (peak, after)", worst_peak > 0.05 && worst_after < 1e-4, worst_peak, worst_after);
+  }
+  {
+    // Variation: 32 mallet hits differ, both polarities occur, and the
+    // pulse area (level x width, the DC the allpass chain passes) stays
+    // within (1 +- 0.12) (1 +- 0.1) of the nominal 0.5 * 48 / 2 = 12.
+    static Schliere s;
+    s.Init(Z);
+    SchliereParameters p = Settings(1000, 0.75, 1, 0);
+    p.excite_type = SCHLIERE_EXCITE_MALLET;
+    const size_t spacing = 400 * kBlock;
+    Out o = Run(&s, p, 32 * spacing, [](size_t) { return 0.0; },
+                [&](SchliereParameters* q, size_t t) { q->excite = t % spacing == 0; });
+    double lo = 1e9, hi = 0;
+    int positive = 0;
+    for (size_t h = 0; h < 32; ++h) {
+      double area = 0;
+      for (size_t n = h * spacing; n < (h + 1) * spacing; ++n) area += o.l[n];
+      lo = std::fmin(lo, std::fabs(area));
+      hi = std::fmax(hi, std::fabs(area));
+      if (area > 0) ++positive;
+    }
+    bool ok = hi > lo * 1.01 && positive > 4 && positive < 28 &&
+        lo > 12 * 0.88 * 0.9 * 0.97 && hi < 12 * 1.12 * 1.1 * 1.03;
+    check("excite variation: hits differ, both polarities, area within +-23 %", ok, lo / 12, hi / 12);
   }
 
   // ---- Chain layouts: S and L ----
@@ -727,15 +798,35 @@ int main() {
           seq[1] == SCHLIERE_SELECTION_S_96K && seq[2] == SCHLIERE_SELECTION_L &&
           seq[3] == SCHLIERE_SELECTION_S_48K, seq[3]);
     bool roundtrip = true;
-    for (uint8_t burst = 0; burst <= 1; ++burst) {
+    for (SchliereExcite e : { SCHLIERE_EXCITE_IMPULSE, SCHLIERE_EXCITE_MALLET,
+                              SCHLIERE_EXCITE_PING }) {
       for (SchliereSelection x : { SCHLIERE_SELECTION_S_48K, SCHLIERE_SELECTION_S_96K,
                                    SCHLIERE_SELECTION_L }) {
-        uint8_t o = SchliereOptionsWithSelection(burst, x);
+        uint8_t o = SchliereOptionsWithExcite(SchliereOptionsWithSelection(0, x), e);
         roundtrip = roundtrip && SchliereSelectionFromOptions(o) == x &&
-            (o & kSchliereOptionNoiseBurst) == burst;
+            SchliereExciteFromOptions(o) == e &&
+            SchliereSelectionFromOptions(SchliereOptionsWithSelection(o, x)) == x &&
+            SchliereExciteFromOptions(SchliereOptionsWithSelection(o, x)) == e;
       }
     }
     check("  options keep the excite flavor, every variant reads back", roundtrip, roundtrip);
+    SchliereExcite f = SCHLIERE_EXCITE_IMPULSE;
+    SchliereExcite fseq[4];
+    for (int i = 0; i < 4; ++i) {
+      fseq[i] = f;
+      f = NextSchliereExcite(f);
+    }
+    check("excite cycle impulse -> mallet -> ping -> impulse",
+          fseq[1] == SCHLIERE_EXCITE_MALLET && fseq[2] == SCHLIERE_EXCITE_PING &&
+          fseq[3] == SCHLIERE_EXCITE_IMPULSE, fseq[3]);
+    // v0.2.0 saved its noise burst as bit 1: it reads as the mallet. v0.2.0
+    // (mask 7) reads the ping as the impulse after a rollback.
+    bool excite_compatible =
+        SchliereExciteFromOptions(1) == SCHLIERE_EXCITE_MALLET &&
+        SchliereExciteFromOptions(1 | 6) == SCHLIERE_EXCITE_MALLET &&
+        (SchliereOptionsWithExcite(0, SCHLIERE_EXCITE_PING) & 7) == 0 &&
+        kSchliereOptionMask == 15;
+    check("  noise burst of v0.2.0 reads as mallet; rollback turns ping into impulse", excite_compatible, excite_compatible);
     // Options saved by v0.1.0 (bits 1, 2) keep their meaning; v0.1.0 masks
     // the L bit away and falls back to S at 48 kHz.
     bool compatible =

@@ -104,12 +104,14 @@ class Settings {
     return 1.0f - 0.25f * static_cast<float>(data_.state.schliere_dry_steps);
   }
   
-  inline bool schliere_option(uint8_t option) const {
-    return (data_.state.schliere_options & option) != 0;
+  inline SchliereExcite schliere_excite() const {
+    return SchliereExciteFromOptions(data_.state.schliere_options);
   }
-  
-  inline void ToggleSchliereOption(uint8_t option) {
-    data_.state.schliere_options ^= option;
+
+  inline void NextSchliereExcite() {
+    data_.state.schliere_options = SchliereOptionsWithExcite(
+        data_.state.schliere_options,
+        rings::NextSchliereExcite(schliere_excite()));
   }
 
   inline SchliereSelection schliere_selection() const {

@@ -33,11 +33,14 @@
 namespace rings {
 
 // Bits of State::schliere_options (default 0: impulse excite, S at 48 kHz).
-// Firmware without the L bit (v0.1.0) masks it away and falls back to S.
-const uint8_t kSchliereOptionNoiseBurst = 1;  // excite with a noise burst
+// Older firmware masks away the bits it does not know: v0.1.0 turns L into
+// S, v0.1.0 and v0.2.0 turn the ping into the impulse (and read the mallet
+// bit as their noise burst, which the mallet replaced).
+const uint8_t kSchliereOptionMallet = 1;  // excite: mallet (was: noise burst)
 const uint8_t kSchliereOptionOversampled = 2;  // S: feedback path at 96 kHz
 const uint8_t kSchliereOptionLong = 4;  // variant L (48 kHz only)
-const uint8_t kSchliereOptionMask = 7;
+const uint8_t kSchliereOptionPing = 8;  // excite: ping (wins over the mallet)
+const uint8_t kSchliereOptionMask = 15;
 
 enum SchliereSelection {
   SCHLIERE_SELECTION_S_48K,
@@ -78,6 +81,41 @@ inline SchliereSelection NextSchliereSelection(SchliereSelection selection) {
       return SCHLIERE_SELECTION_L;
     default:
       return SCHLIERE_SELECTION_S_48K;
+  }
+}
+
+inline SchliereExcite SchliereExciteFromOptions(uint8_t options) {
+  if (options & kSchliereOptionPing) {
+    return SCHLIERE_EXCITE_PING;
+  }
+  return options & kSchliereOptionMallet
+      ? SCHLIERE_EXCITE_MALLET
+      : SCHLIERE_EXCITE_IMPULSE;
+}
+
+inline uint8_t SchliereOptionsWithExcite(
+    uint8_t options, SchliereExcite excite) {
+  options &= ~(kSchliereOptionMallet | kSchliereOptionPing);
+  switch (excite) {
+    case SCHLIERE_EXCITE_MALLET:
+      return options | kSchliereOptionMallet;
+    case SCHLIERE_EXCITE_PING:
+      return options | kSchliereOptionPing;
+    default:
+      return options;
+  }
+}
+
+// Left button held 3 s: impulse -> mallet -> ping -> impulse, the order of
+// the LED 1 colors green / yellow / red.
+inline SchliereExcite NextSchliereExcite(SchliereExcite excite) {
+  switch (excite) {
+    case SCHLIERE_EXCITE_IMPULSE:
+      return SCHLIERE_EXCITE_MALLET;
+    case SCHLIERE_EXCITE_MALLET:
+      return SCHLIERE_EXCITE_PING;
+    default:
+      return SCHLIERE_EXCITE_IMPULSE;
   }
 }
 
