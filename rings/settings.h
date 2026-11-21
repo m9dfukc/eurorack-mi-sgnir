@@ -32,16 +32,13 @@
 #include "stmlib/stmlib.h"
 
 #include "rings/drivers/adc.h"
+#include "rings/schliere_selection.h"
 
 namespace rings {
 
 // Marks a valid sgnir extension block in the State struct. Settings saved by
 // the stock firmware carry arbitrary bytes there (formerly padding).
 const uint32_t kStateExtensionId = 0x53474e31;  // 'SGN1'
-
-// Bits of State::schliere_options (default 0: impulse excite, 48 kHz).
-const uint8_t kSchliereOptionNoiseBurst = 1;  // excite with a noise burst
-const uint8_t kSchliereOptionOversampled = 2;  // feedback path at 96 kHz
 
 struct CalibrationData {
   float pitch_offset;
@@ -113,6 +110,16 @@ class Settings {
   
   inline void ToggleSchliereOption(uint8_t option) {
     data_.state.schliere_options ^= option;
+  }
+
+  inline SchliereSelection schliere_selection() const {
+    return SchliereSelectionFromOptions(data_.state.schliere_options);
+  }
+
+  inline void NextSchliereSelection() {
+    data_.state.schliere_options = SchliereOptionsWithSelection(
+        data_.state.schliere_options,
+        rings::NextSchliereSelection(schliere_selection()));
   }
   
   inline void NextSchliereMix() {

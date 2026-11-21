@@ -130,12 +130,14 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
     if (ui.TakeSchliereExciteRequest()) {
       schliere_parameters.excite = true;  // right button
     }
-    // Variant S, by default without its 96 kHz feedback path: that costs
-    // ≈ 8–11 % of the block budget on the module (≈ 89 % instead of 81 %
-    // peak), and with block-rate CVs the difference is small (audible, 48 kHz
-    // judged fine; user 2026-11-20). Selectable with the right button.
-    schliere.set_oversampled_feedback(
-        settings.state().schliere_options & kSchliereOptionOversampled);
+    // Right button: S at 48 kHz (default), S with its 96 kHz feedback path
+    // (≈ 10 % more of the block budget on the module; with block-rate CVs
+    // the difference is small, 48 kHz judged fine; user 2026-11-20), or L
+    // with the longer chain, 48 kHz only. Changing the chain fades the wet
+    // signal out and back in (Schliere::set_chain).
+    SchliereSelection selection = settings.schliere_selection();
+    schliere.set_oversampled_feedback(selection == SCHLIERE_SELECTION_S_96K);
+    schliere.set_chain(SchliereChainFor(selection));
 #ifdef SCHLIERE_BENCHMARK
     if ((++benchmark_counter & 15) == 0) {
       uint32_t t0 = DWT->CYCCNT;

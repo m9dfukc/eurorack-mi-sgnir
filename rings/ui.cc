@@ -46,7 +46,8 @@ const int32_t kMediumPressDuration = 200;
 // Both switches must be held this long to enter calibration.
 const int32_t kCalibrationPressDuration = 6000;
 // Schliere bank, right button: held this long (but released before
-// kLongPressDuration, which changes the bank) toggles the 96 kHz path.
+// kLongPressDuration, which changes the bank) selects the next variant
+// (S 48 kHz -> S 96 kHz -> L).
 const int32_t kSchliereToggleDuration = 1000;
 const uint32_t kSchliereDisplayDuration = 1500;
 
@@ -161,14 +162,14 @@ void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
       leds_.set(1, on && ones == 0, on);
     } else {
       // Pause: LED 1 = bank (green = grounded models, yellow = bonus
-      // models, red = Schliere); LED 2 = 96 kHz feedback path (green = on,
-      // yellow = off) or red = base load only.
+      // models, red = Schliere); LED 2 = Schliere variant (green = S
+      // 48 kHz, yellow = S 96 kHz, red = L) or off = base load only.
       bool schliere = settings_->state().schliere;
       leds_.set(0, schliere || part_->model() >= 3, !schliere);
-      bool oversampled = settings_->schliere_option(
-          kSchliereOptionOversampled);
-      leds_.set(1, benchmark_base_only_ || !oversampled,
-                !benchmark_base_only_);
+      SchliereSelection selection = settings_->schliere_selection();
+      bool on = !benchmark_base_only_;
+      leds_.set(1, on && selection != SCHLIERE_SELECTION_S_48K,
+                on && selection <= SCHLIERE_SELECTION_S_96K);
     }
     return;
   }
@@ -223,15 +224,16 @@ void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
 #endif  // SCHLIERE_CPU_METER
   }
   
-  // LED 2: hard blink marks the bank, the color the feedback path (green =
-  // 96 kHz, yellow = 48 kHz). While the right button is held between 1 and
-  // 3 s, it previews the path selected on release.
-  bool yellow = !settings_->schliere_option(kSchliereOptionOversampled);
+  // LED 2: hard blink marks the bank, the color the variant (green = S
+  // 48 kHz, yellow = S 96 kHz, red = L). While the right button is held
+  // between 1 and 3 s, it previews the variant selected on release.
+  SchliereSelection selection = settings_->schliere_selection();
   if (switches_.pressed(1) && press_time_[1] != 0 &&
       static_cast<int32_t>(now - press_time_[1]) >= kSchliereToggleDuration) {
-    yellow = !yellow;
+    selection = NextSchliereSelection(selection);
   }
-  leds_.set(1, slow_blink && yellow, slow_blink);
+  leds_.set(1, slow_blink && selection != SCHLIERE_SELECTION_S_48K,
+            slow_blink && selection <= SCHLIERE_SELECTION_S_96K);
 }
 
 void Ui::ToggleFrequencyLocking() {
@@ -537,10 +539,10 @@ void Ui::OnSwitchReleased(const Event& e) {
           }
         }
       } else if (settings_->state().schliere) {
-        // The press itself excited the chain. Held 1..3 s: feedback path at
-        // 96 kHz (variant S as on the AC/DC) or 48 kHz.
+        // The press itself excited the chain. Held 1..3 s: next variant,
+        // S 48 kHz -> S 96 kHz (as on the AC/DC) -> L (48 kHz only).
         if (e.data >= kSchliereToggleDuration) {
-          settings_->ToggleSchliereOption(kSchliereOptionOversampled);
+          settings_->NextSchliereSelection();
         }
       } else {
         int32_t model = part_->model();

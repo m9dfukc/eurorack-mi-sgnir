@@ -84,8 +84,8 @@ const float kExciteLevel = 0.5f;  // [hypothesis] tune by ear on hardware
 const float kBurstTime = 0.003f;
 const float kBurstLowpassHz = 4000.0f;
 
-const uint8_t kTapsL[kSchliereTaps] = { 1, 9, 17, 25, 33, 41, 49 };
-const uint8_t kTapsR[kSchliereTaps] = { 1, 11, 21, 31, 41, 51, 61 };
+const float kGateTime = 0.005f;  // fade out/in around a chain change
+
 const uint32_t kAllTaps = (1u << kSchliereTaps) - 1;
 
 inline float Clamp(float x, float lo, float hi) {
@@ -143,27 +143,68 @@ SCHLIERE_INLINE float Stages(
   return x;
 }
 
-// The chain of kSchliereStages stages. Only the nodes read by the taps are
-// stored: 1, 9, 11, 17, 21, 25, 31, 33, 41, 49, 51, 61 (union of kTapsL,
-// kTapsR and the chain end). Written out with constant segment ends instead
-// of looping over a node table, so that GCC unrolls the chain completely
-// (cycle model: 18.5 instead of 29 cycles per stage).
-SCHLIERE_INLINE void Chain(
-    float x, float* s, float* node, float a1, float a2, float g2, float c) {
-  node[0] = x;
-  node[1] = x = Stages(x, s, 0, 1, a1, a2, g2, c);
-  node[9] = x = Stages(x, s, 1, 9, a1, a2, g2, c);
-  node[11] = x = Stages(x, s, 9, 11, a1, a2, g2, c);
-  node[17] = x = Stages(x, s, 11, 17, a1, a2, g2, c);
-  node[21] = x = Stages(x, s, 17, 21, a1, a2, g2, c);
-  node[25] = x = Stages(x, s, 21, 25, a1, a2, g2, c);
-  node[31] = x = Stages(x, s, 25, 31, a1, a2, g2, c);
-  node[33] = x = Stages(x, s, 31, 33, a1, a2, g2, c);
-  node[41] = x = Stages(x, s, 33, 41, a1, a2, g2, c);
-  node[49] = x = Stages(x, s, 41, 49, a1, a2, g2, c);
-  node[51] = x = Stages(x, s, 49, 51, a1, a2, g2, c);
-  node[61] = Stages(x, s, 51, 61, a1, a2, g2, c);
-}
+// Chain layouts. Each one has its length, its taps and its Chain(): the
+// stages, storing only the nodes read by the taps (union of the L and R taps
+// and the chain end). Chain() is written out with constant segment ends
+// instead of looping over a node table, so that GCC unrolls the chain
+// completely (cycle model: 18.5 instead of 29 cycles per stage). The host
+// tests check every tap of every layout against the textbook allpass.
+
+// S: 61 stages, the layout of the OWL patch.
+struct LayoutS {
+  static const size_t kStages = 61;
+  static const bool kOversampling = true;
+  static const uint8_t kTapsL[kSchliereTaps];
+  static const uint8_t kTapsR[kSchliereTaps];
+  static SCHLIERE_INLINE void Chain(
+      float x, float* s, float* node, float a1, float a2, float g2, float c) {
+    node[0] = x;
+    node[1] = x = Stages(x, s, 0, 1, a1, a2, g2, c);
+    node[9] = x = Stages(x, s, 1, 9, a1, a2, g2, c);
+    node[11] = x = Stages(x, s, 9, 11, a1, a2, g2, c);
+    node[17] = x = Stages(x, s, 11, 17, a1, a2, g2, c);
+    node[21] = x = Stages(x, s, 17, 21, a1, a2, g2, c);
+    node[25] = x = Stages(x, s, 21, 25, a1, a2, g2, c);
+    node[31] = x = Stages(x, s, 25, 31, a1, a2, g2, c);
+    node[33] = x = Stages(x, s, 31, 33, a1, a2, g2, c);
+    node[41] = x = Stages(x, s, 33, 41, a1, a2, g2, c);
+    node[49] = x = Stages(x, s, 41, 49, a1, a2, g2, c);
+    node[51] = x = Stages(x, s, 49, 51, a1, a2, g2, c);
+    node[61] = Stages(x, s, 51, 61, a1, a2, g2, c);
+  }
+};
+const uint8_t LayoutS::kTapsL[kSchliereTaps] = { 1, 9, 17, 25, 33, 41, 49 };
+const uint8_t LayoutS::kTapsR[kSchliereTaps] = { 1, 11, 21, 31, 41, 51, 61 };
+
+// L: 98 stages (196 poles), taps 13 and 16-17 stages apart (about 4 : 5).
+struct LayoutL {
+  static const size_t kStages = 98;
+  static const bool kOversampling = false;
+  static const uint8_t kTapsL[kSchliereTaps];
+  static const uint8_t kTapsR[kSchliereTaps];
+  static SCHLIERE_INLINE void Chain(
+      float x, float* s, float* node, float a1, float a2, float g2, float c) {
+    node[0] = x;
+    node[1] = x = Stages(x, s, 0, 1, a1, a2, g2, c);
+    node[14] = x = Stages(x, s, 1, 14, a1, a2, g2, c);
+    node[17] = x = Stages(x, s, 14, 17, a1, a2, g2, c);
+    node[27] = x = Stages(x, s, 17, 27, a1, a2, g2, c);
+    node[33] = x = Stages(x, s, 27, 33, a1, a2, g2, c);
+    node[40] = x = Stages(x, s, 33, 40, a1, a2, g2, c);
+    node[49] = x = Stages(x, s, 40, 49, a1, a2, g2, c);
+    node[53] = x = Stages(x, s, 49, 53, a1, a2, g2, c);
+    node[66] = x = Stages(x, s, 53, 66, a1, a2, g2, c);
+    node[79] = x = Stages(x, s, 66, 79, a1, a2, g2, c);
+    node[82] = x = Stages(x, s, 79, 82, a1, a2, g2, c);
+    node[98] = Stages(x, s, 82, 98, a1, a2, g2, c);
+  }
+};
+const uint8_t LayoutL::kTapsL[kSchliereTaps] = { 1, 14, 27, 40, 53, 66, 79 };
+const uint8_t LayoutL::kTapsR[kSchliereTaps] = { 1, 17, 33, 49, 66, 82, 98 };
+
+static_assert(LayoutL::kStages == kSchliereStagesL &&
+              LayoutS::kStages == kSchliereStages,
+              "chain lengths do not match schliere.h");
 
 // Resonance knob -> ln(Q): straight lines between Q 0.01 / 0.026 / 0.51 /
 // 3.81 / 16 at 0, 25, 50, 75, 100 %.
@@ -251,16 +292,16 @@ void Schliere::Init(SchliereVariant variant) {
   limiter_blocks_ = 0;
   tap_detent_ = 0;
   primed_ = false;
+  chain_ = pending_chain_ = SCHLIERE_CHAIN_S;
+  gate_ = 1.0f;
   Reset();
 }
 
 void Schliere::Reset() {
-  for (size_t i = 0; i < 2 * kSchliereStages; ++i) {
+  for (size_t i = 0; i < 2 * kSchliereStagesL; ++i) {
     state_[i] = 0.0f;
   }
-  for (size_t i = 0; i <= kSchliereStages; ++i) {
-    node_[i] = 0.0f;
-  }
+  chain_end_ = 0.0f;
   up_in_.Init();
   up_loop_.Init();
   down_.Init();
@@ -358,94 +399,40 @@ void Schliere::UpdateTapDetent() {
 }
 
 bool Schliere::Broken() const {
-  return IsBroken(node_[kSchliereStages]) ||
+  return IsBroken(chain_end_) ||
       IsBroken(loop_state_) ||
       IsBroken(loop_lp_);
 }
 
-SCHLIERE_RAM_CODE void Schliere::Process(
+// The sample loop. Forced inline into Process(): one copy per layout, each
+// with its chain unrolled and its tap table and chain end as constants.
+template<typename Layout>
+SCHLIERE_INLINE void Schliere::Run(
     const SchliereParameters& p,
     const float* in,
     float* out_l,
     float* out_r,
-    size_t size) {
-  if (size != slew_block_size_) {
-    slew_block_size_ = size;
-    slew_block_ = 1.0f - expf(-static_cast<float>(size) /
-        (kSmoothTime * kSampleRate));
-  }
-
-  bool first = !primed_;
-  if (first) {
-    frequency_ = p.frequency;
-    resonance_ = p.resonance;
-    tap_ = p.tap;
-    feedback_ = p.feedback;
-    spread_ = p.spread;
-    mix_ = p.mix;
-    tap_cv_ = p.tap_cv;
-    feedback_cv_ = p.feedback_cv;
-    feedback_cv_lp_[0] = feedback_cv_lp_[1] = p.feedback_cv;
-    cv_previous_ = p.feedback_cv;
-    feedback_lp_[0] = feedback_lp_[1] = FeedbackAmount(p.feedback);
-  }
-
-  // Frequency and resonance: smoothed per block, coefficients ramped
-  // linearly over the block.
-  frequency_ += (p.frequency - frequency_) * slew_block_;
-  resonance_ += (p.resonance - resonance_) * slew_block_;
-  float g_target, k_target;
-  ComputeCoefficients(frequency_, resonance_, p.octaves, &g_target, &k_target);
-  if (first) {
-    g_ = g_target;
-    k_ = k_target;
-    primed_ = true;
-  }
-  float inverse_size = 1.0f / static_cast<float>(size);
-  g_step_ = (g_target - g_) * inverse_size;
-  k_step_ = (k_target - k_) * inverse_size;
-
-  // The stage coefficients a1 = 1 / (1 + g (g + k)), a2 = g a1 are ramped
-  // linearly over the block instead of dividing per sample. Exact at the
-  // block boundaries; identical to the per-sample form when nothing moves.
-  float g_end = g_ + g_step_ * static_cast<float>(size);
-  float k_end = k_ + k_step_ * static_cast<float>(size);
-  float a1_start = 1.0f / (1.0f + (g_ + g_step_) * ((g_ + g_step_) +
-                                                    (k_ + k_step_)));
-  float a1_end = 1.0f / (1.0f + g_end * (g_end + k_end));
-  float a2_start = (g_ + g_step_) * a1_start;
-  float a2_end = g_end * a1_end;
-  float a1 = a1_start;
-  float a2 = a2_start;
-  float a1_step = 0.0f, a2_step = 0.0f;
-  if (size > 1) {
-    a1_step = (a1_end - a1_start) / static_cast<float>(size - 1);
-    a2_step = (a2_end - a2_start) / static_cast<float>(size - 1);
-  }
-
-  // CVs arrive once per block: ramp them over the block.
-  float tap_cv_step = (p.tap_cv - tap_cv_) * inverse_size;
-  float feedback_cv_step = (p.feedback_cv - feedback_cv_) * inverse_size;
-
-  if (p.excite) {
-    if (p.excite_type == SCHLIERE_EXCITE_IMPULSE) {
-      impulse_pending_ = true;
-    } else {
-      burst_level_ = 1.0f;
-    }
-  }
-  // An excitation can only start here, at a block boundary: when none is
-  // pending or still decaying, skip Excitation() for the whole block.
-  const bool exciting = impulse_pending_ || burst_level_ > 1.0e-4f;
-  if (!exciting) {
-    burst_lp_ = 0.0f;
-  }
+    size_t size,
+    Block* b) {
+  float a1 = b->a1;
+  float a2 = b->a2;
+  const float a1_step = b->a1_step;
+  const float a2_step = b->a2_step;
+  const float tap_cv_step = b->tap_cv_step;
+  const float feedback_cv_step = b->feedback_cv_step;
+  bool first = b->first;
+  const bool exciting = b->exciting;
+  const bool oversampled =
+      Layout::kOversampling && switches_.oversampled_feedback;
 
   // Taps with a non-zero smoothed weight; the others are skipped.
-  uint32_t tap_active = first ? kAllTaps : tap_active_;
+  uint32_t tap_active = b->tap_active;
   const bool smooth_tap_weights = switches_.smooth_tap_weights;
 
-  loop_peak_ = 0.0f;
+  // Nodes of the current sample; Chain() writes only those the taps read.
+  float node[Layout::kStages + 1];
+  node[Layout::kStages] = chain_end_;  // read below even when size is 0
+
   for (size_t i = 0; i < size; ++i) {
     g_ += g_step_;
     k_ += k_step_;
@@ -462,14 +449,14 @@ SCHLIERE_RAM_CODE void Schliere::Process(
     }
 
     feedback_ += (p.feedback - feedback_) * slew_sample_;
-    float x = switches_.oversampled_feedback
+    float x = oversampled
         ? ChainInputOversampled(in[i], feedback_cv)
         : ChainInput(in[i], feedback_cv);
     if (exciting) {
       x += Excitation();
     }
 
-    Chain(x, state_, node_, a1, a2, g2, c);
+    Layout::Chain(x, state_, node, a1, a2, g2, c);
     a1 += a1_step;
     a2 += a2_step;
 
@@ -510,8 +497,8 @@ SCHLIERE_RAM_CODE void Schliere::Process(
       } else if (w == 0.0f) {
         continue;
       }
-      left += w * node_[kTapsL[j]];
-      right_classic += w * node_[kTapsR[j]];
+      left += w * node[Layout::kTapsL[j]];
+      right_classic += w * node[Layout::kTapsR[j]];
     }
     first = false;
 
@@ -526,7 +513,7 @@ SCHLIERE_RAM_CODE void Schliere::Process(
     } else {
       float t_spread = Crossfade(v - 1.0f, false);
       right = right_classic + t_spread * (
-          node_[kSchliereStages] - right_classic);
+          node[Layout::kStages] - right_classic);
     }
 
     // Feedback loop: highpass, soft limit.
@@ -537,12 +524,137 @@ SCHLIERE_RAM_CODE void Schliere::Process(
       loop_peak_ = fabsf(loop);
     }
 
+    // The gate is 1 except around a chain change.
     mix_ += (p.mix - mix_) * slew_sample_;
+    // A member, not a local: it is only needed after the chain, and as a
+    // local it would occupy an FPU register across the chain (spills).
+    gate_ += gate_step_;
     float dry = (1.0f - mix_) * in[i];
-    out_l[i] = Soft(dry + mix_ * left, kOutKnee, kOutCeiling);
-    out_r[i] = Soft(dry + mix_ * right, kOutKnee, kOutCeiling);
+    float wet = mix_ * gate_;
+    out_l[i] = Soft(dry + wet * left, kOutKnee, kOutCeiling);
+    out_r[i] = Soft(dry + wet * right, kOutKnee, kOutCeiling);
   }
-  tap_active_ = tap_active;
+  b->tap_active = tap_active;
+  chain_end_ = node[Layout::kStages];
+}
+
+SCHLIERE_RAM_CODE void Schliere::Process(
+    const SchliereParameters& p,
+    const float* in,
+    float* out_l,
+    float* out_r,
+    size_t size) {
+  if (size != slew_block_size_) {
+    slew_block_size_ = size;
+    slew_block_ = 1.0f - expf(-static_cast<float>(size) /
+        (kSmoothTime * kSampleRate));
+  }
+
+  bool first = !primed_;
+  if (first) {
+    frequency_ = p.frequency;
+    resonance_ = p.resonance;
+    tap_ = p.tap;
+    feedback_ = p.feedback;
+    spread_ = p.spread;
+    mix_ = p.mix;
+    tap_cv_ = p.tap_cv;
+    feedback_cv_ = p.feedback_cv;
+    feedback_cv_lp_[0] = feedback_cv_lp_[1] = p.feedback_cv;
+    cv_previous_ = p.feedback_cv;
+    feedback_lp_[0] = feedback_lp_[1] = FeedbackAmount(p.feedback);
+  }
+
+  // Chain change: the wet signal fades out, then the chain restarts silent
+  // with the new length, then the wet signal fades back in.
+  if (pending_chain_ != chain_ && gate_ <= 0.0f) {
+    chain_ = pending_chain_;
+    Reset();
+  }
+  float inverse_size = 1.0f / static_cast<float>(size);
+  // Linear ramp; the last step snaps to 0 or 1 (rounding would otherwise
+  // leave a sliver and add a block).
+  float gate_move = static_cast<float>(size) / (kGateTime * kSampleRate);
+  float gate_end;
+  if (pending_chain_ != chain_) {
+    gate_end = gate_ - gate_move;
+    if (gate_end < 0.5f * gate_move) {
+      gate_end = 0.0f;
+    }
+  } else {
+    gate_end = gate_ + gate_move;
+    if (gate_end > 1.0f - 0.5f * gate_move) {
+      gate_end = 1.0f;
+    }
+  }
+
+  // Frequency and resonance: smoothed per block, coefficients ramped
+  // linearly over the block.
+  frequency_ += (p.frequency - frequency_) * slew_block_;
+  resonance_ += (p.resonance - resonance_) * slew_block_;
+  float g_target, k_target;
+  ComputeCoefficients(frequency_, resonance_, p.octaves, &g_target, &k_target);
+  if (first) {
+    g_ = g_target;
+    k_ = k_target;
+    primed_ = true;
+  }
+  g_step_ = (g_target - g_) * inverse_size;
+  k_step_ = (k_target - k_) * inverse_size;
+
+  // The stage coefficients a1 = 1 / (1 + g (g + k)), a2 = g a1 are ramped
+  // linearly over the block instead of dividing per sample. Exact at the
+  // block boundaries; identical to the per-sample form when nothing moves.
+  float g_end = g_ + g_step_ * static_cast<float>(size);
+  float k_end = k_ + k_step_ * static_cast<float>(size);
+  float a1_start = 1.0f / (1.0f + (g_ + g_step_) * ((g_ + g_step_) +
+                                                    (k_ + k_step_)));
+  float a1_end = 1.0f / (1.0f + g_end * (g_end + k_end));
+  float a2_start = (g_ + g_step_) * a1_start;
+  float a2_end = g_end * a1_end;
+  Block b;
+  b.a1 = a1_start;
+  b.a2 = a2_start;
+  b.a1_step = b.a2_step = 0.0f;
+  if (size > 1) {
+    b.a1_step = (a1_end - a1_start) / static_cast<float>(size - 1);
+    b.a2_step = (a2_end - a2_start) / static_cast<float>(size - 1);
+  }
+
+  // CVs arrive once per block: ramp them over the block.
+  b.tap_cv_step = (p.tap_cv - tap_cv_) * inverse_size;
+  b.feedback_cv_step = (p.feedback_cv - feedback_cv_) * inverse_size;
+
+  gate_step_ = (gate_end - gate_) * inverse_size;
+
+  if (p.excite) {
+    if (p.excite_type == SCHLIERE_EXCITE_IMPULSE) {
+      impulse_pending_ = true;
+    } else {
+      burst_level_ = 1.0f;
+    }
+  }
+  // An excitation can only start here, at a block boundary: when none is
+  // pending or still decaying, skip Excitation() for the whole block.
+  b.exciting = impulse_pending_ || burst_level_ > 1.0e-4f;
+  if (!b.exciting) {
+    burst_lp_ = 0.0f;
+  }
+
+  b.tap_active = first ? kAllTaps : tap_active_;
+  b.first = first;
+
+  loop_peak_ = 0.0f;
+  switch (chain_) {
+    case SCHLIERE_CHAIN_L:
+      Run<LayoutL>(p, in, out_l, out_r, size, &b);
+      break;
+    default:
+      Run<LayoutS>(p, in, out_l, out_r, size, &b);
+      break;
+  }
+  tap_active_ = b.tap_active;
+  gate_ = gate_end;
 
   // Garbage in the state (should never happen): silence and start over.
   if (Broken()) {

@@ -82,13 +82,16 @@ An equivalence test against the original OWL patch lives in the workbench repo
 LED 1 in the Schliere bank, and a benchmark mode that blinks the load in percent (see the
 comments there).
 
-Measured on the module (2026-11-21, benchmark build, peaks): Schliere 59 % at 48 kHz, 69 %
-with the 96 kHz feedback path (v0.1.0: 81 % / 89 %); base load without the DSP 13 %; grounded
-models 71–84 % depending on the model (stock code). The flash prefetch (enabled at boot, not
+Measured on the module (2026-11-21, benchmark builds, peaks, knobs at noon, no input):
+Schliere S 62 % at 48 kHz, 71 % with the 96 kHz feedback path (v0.1.0: 81 % / 89 %), L 82 %;
+base load without the DSP 13 %; grounded models 71–84 % depending on the model (stock code).
+Each extra stage of the chain costs about 0.5 % of the block budget. The flash prefetch (enabled at boot, not
 set by `SystemInit`) saved about 10 %; running Schliere from RAM was 18 % slower and is not
 used. The Schliere chain is unrolled straight-line code and limited by instruction fetch from
 flash: a stage with one fused multiply-add (4 bytes shorter) measured faster than the
-cycle-optimal one without.
+cycle-optimal one without. Keep the stage states within the first 1020 bytes of the
+`Schliere` object (the `vldr`/`vstr` offset range): placed further back, GCC reloaded an
+address per stage and S cost 5 points more.
 
 ## Differences from the stock firmware
 
@@ -128,9 +131,17 @@ so an aborted calibration cannot leave them behind.
 
 ### Schliere (third bank)
 
-A long chain of 61 second-order allpass filters with feedback, inspired by the Smoothie Audio
-*Smear*: transients smear into chirps, with feedback it becomes a resonator. Port of variant
-**S** of the author's Schliere patch for the AC/DC (OWL).
+A long chain of second-order allpass filters with feedback, inspired by the Smoothie Audio
+*Smear*: transients smear into chirps, with feedback it becomes a resonator. Port of the
+author's Schliere patch for the AC/DC (OWL), in two variants (right button, see below):
+
+| Variant | Chain | Taps L / R (detents 1 … 7) | Feedback path |
+|---|---|---|---|
+| **S** (default) | 61 stages (122 poles) | L 2 … 98 poles, R 2 … 122 poles | 48 kHz, or 96 kHz as on the AC/DC |
+| **L** | 98 stages (196 poles, two Smear sections in series) | L 2 … 158 poles, R 2 … 196 poles | 48 kHz only |
+
+L is variant SchliereL of the AC/DC (160 stages there) cut to what fits the Rings processor:
+the smear lasts about 1.6 times as long and has more notches between two detents.
 
 **Selecting it:** hold the right button for 3 s to cycle through the three banks: grounded
 models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** → grounded models.
@@ -140,10 +151,10 @@ models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** �
 | Control | Function |
 |---|---|
 | FREQUENCY + V/OCT + FM (CV + att.) | Frequency where the delay acts: continuous over the whole knob, 20 Hz … 20 kHz (≈ 632 Hz at noon, ≈ 11 octaves of travel); V/OCT 1 V/oct with Rings' calibration; FM through its attenuverter |
-| STRUCTURE + CV + att. | **Tap**: where L is taken from the chain, seven detents (2, 18, 34, 50, 66, 82, 98 poles). Each detent has a hold zone; between two detents the taps are crossfaded, which creates phaser-like notches. Turning it changes how long and how chirpy the smear is |
+| STRUCTURE + CV + att. | **Tap**: where L is taken from the chain, seven detents (S: 2, 18, 34, 50, 66, 82, 98 poles; L: 2, 28, 54, 80, 106, 132, 158 poles; R about 5/4 as far down the chain). Each detent has a hold zone; between two detents the taps are crossfaded, which creates phaser-like notches. Turning it changes how long and how chirpy the smear is |
 | BRIGHTNESS + CV + att. | **Resonance** (Q 0.01 … 16): low = the bass arrives late, high = a narrow band around FREQUENCY rings on |
 | DAMPING + CV + att. | **Feedback**: knob 0 … ≈ 95 %, up to 97 % with CV (soft knee above 90 %). A negative CV inverts the loop (peaks and troughs swap). L goes back to the chain input through a 10 Hz highpass and a soft limiter; the loop never self-oscillates |
-| POSITION + CV + att. | **Spread**: distance between the L and R taps. Fully CCW = mono (R = L), noon = classic stereo (R further down the chain), fully CW = R at the chain end (122 poles). Hold zones at all three positions |
+| POSITION + CV + att. | **Spread**: distance between the L and R taps. Fully CCW = mono (R = L), noon = classic stereo (R further down the chain), fully CW = R at the chain end (S: 122 poles, L: 196 poles). Hold zones at all three positions |
 | STRUM | **Excite**: a trigger at the jack injects an impulse or a short noise burst into the chain (Rings' internal strum detection is not used here) |
 | IN | Audio input (no noise gate) |
 | ODD / EVEN | L / R. With only ODD patched, Rings mixes both outputs in hardware [manual]; L and R are the same chain at different taps, so the mono sum has comb notches and sounds thinner — turn POSITION fully CCW for a clean mono signal |
@@ -155,8 +166,8 @@ models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** �
 | Left, short | **Dry/wet**: 100 → 75 → 50 → 25 → 100 % wet (default 100 %). 50 % gives the deepest phaser notches |
 | Left, hold 3 s | **Excite flavor**: impulse ↔ noise burst |
 | Right, press | **Excite** the moment the button goes down (also when it is then held) |
-| Right, hold 1–3 s | **Feedback path 48 kHz ↔ 96 kHz**, switched on release. 48 kHz is the default; 96 kHz is the AC/DC variant S (feedback product oversampled), audibly a bit different, ≈ 8 % more CPU |
-| Right, hold 3 s | Next bank (no 48/96 kHz change) |
+| Right, hold 1–3 s | **Variant**, switched on release: S 48 kHz → S 96 kHz → L → S 48 kHz. S 48 kHz is the default; S 96 kHz is the AC/DC variant S (feedback product oversampled), audibly a bit different, ≈ 9 % more CPU. Changing between S and L fades the wet signal out, restarts the chain silent and fades back in (5 ms each way), so ringing tails are cut |
+| Right, hold 3 s | Next bank (no variant change) |
 | Both, hold > 0.2 s | Frequency locking (see above). While locked, the FREQUENCY knob snaps to whole octaves of the locked frequency (≈ one octave per 9 % of travel) |
 | Both, hold 6 s | Calibration (see above) |
 
@@ -164,9 +175,10 @@ The right button does not excite while the left one is held.
 
 #### LEDs
 
-**LED 2 (right)** blinks hard while the Schliere bank is active. Its color is the feedback path:
-**yellow = 48 kHz**, **green = 96 kHz**. While the right button is held between 1 and 3 s, it
-already shows the path that will be selected on release.
+**LED 2 (right)** blinks hard while the Schliere bank is active. Its color is the variant:
+**green = S 48 kHz**, **yellow = S 96 kHz**, **red = L** (the order of the right-button cycle).
+While the right button is held between 1 and 3 s, it already shows the variant that will be
+selected on release.
 
 **LED 1 (left)** shows one thing at a time, in this order of priority:
 
@@ -183,14 +195,15 @@ Frequency-locking preview and calibration take over both LEDs as described above
 
 #### Saved settings and safety
 
-Bank, dry/wet step, excite flavor and the 48/96 kHz choice are saved and survive a power cycle.
+Bank, dry/wet step, excite flavor and the variant are saved and survive a power cycle. After a
+rollback to v0.1.0, L becomes S 48 kHz.
 If Schliere ever overloads the processor (over budget for 0.2 s), the module leaves the
 Schliere bank by itself.
 
 Differences from the AC/DC version: CVs are read once per 24-sample block (no audio-rate CV), no
 CV dead zone (Rings has calibrated offsets and attenuverters), `tanh` replaced by stmlib's
-`SoftClip`, two outputs instead of four, 48 kHz feedback path by default. Spread, excite and
-dry/wet are new.
+`SoftClip`, two outputs instead of four, 48 kHz feedback path by default, L with 98 instead of
+160 stages and without the 96 kHz path. Spread, excite and dry/wet are new.
 
 ### Settings compatibility
 
@@ -202,8 +215,8 @@ stock firmware can still read the settings after a rollback.
 
 Developed in the (separate) workbench repo `sgnir-workbench`:
 
-1. Schliere: variants O and A on the right button (the switches are implemented), level
-   adjustment after measuring Rings' input/output ranges, CPU profiling on hardware.
+1. Schliere: level adjustment after measuring Rings' input/output ranges, worst-case CPU
+   load with a signal at the input.
 2. New chord tables from the [lylepmills fork](https://github.com/lylepmills/eurorack)
    (optional).
 

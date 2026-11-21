@@ -30,6 +30,11 @@
 // allpass stages -> two taps (L, R) crossfaded between seven fixed detents.
 // L goes back to the input through a 10 Hz highpass and a soft limiter.
 //
+// Variant L (after SchliereL on the AC/DC, 160 stages there): the same signal
+// path with a chain of 98 stages (196 poles, two Smear sections of 98 poles
+// in series) and wider tap spacing, 48 kHz only. 82 instead of 62 % of the
+// block budget [measured, diag9, flash log 2026-11-21].
+//
 // Differences from the OWL patch:
 // - Knobs and CVs arrive once per block; CVs are ramped over the block.
 // - No CV dead zone (Rings has calibrated CV offsets and attenuverters).
@@ -51,9 +56,16 @@
 
 namespace rings {
 
-const size_t kSchliereStages = 61;
+const size_t kSchliereStages = 61;  // chain S
+const size_t kSchliereStagesL = 98;  // chain L
 const float kSchliereKnobOctaves = 10.965784f;  // ln(2000) / ln(2)
 const size_t kSchliereTaps = 7;
+
+// Chain length and tap layout. L and R taps are about 4 : 5 in every layout.
+enum SchliereChain {
+  SCHLIERE_CHAIN_S,  // 61 stages: L every 8 (1 ... 49), R every 10 (1 ... 61)
+  SCHLIERE_CHAIN_L,  // 98 stages: L every 13 (1 ... 79), R every 16-17 (1 ... 98)
+};
 
 enum SchliereVariant {
   SCHLIERE_VARIANT_S,  // O with a lightly smoothed feedback CV
@@ -127,14 +139,25 @@ class Schliere {
   // True while the limiter in the feedback loop works (held for 0.3 s).
   inline bool limiter_active() const { return limiter_blocks_ > 0; }
 
-  // Chain input at 96 kHz (variants S, O). Switchable at runtime for CPU
-  // measurements on the module.
+  // Chain input at 96 kHz (variants S, O). Switchable at runtime. Chain S
+  // only: the L chains always run at 48 kHz.
   inline void set_oversampled_feedback(bool on) {
     switches_.oversampled_feedback = on;
   }
   inline bool oversampled_feedback() const {
     return switches_.oversampled_feedback;
   }
+
+  // Selects the chain. Before the first block (after Init) at once;
+  // afterwards the wet signal fades out, the chain restarts silent with the
+  // new length, and the wet signal fades back in (5 ms each way).
+  inline void set_chain(SchliereChain chain) {
+    pending_chain_ = chain;
+    if (!primed_) {
+      chain_ = chain;
+    }
+  }
+  inline SchliereChain chain() const { return chain_; }
 
   // Detent 1..7 the tap knob rests on (with hysteresis), 0 between detents.
   // Follows the knob only, not the CV.
@@ -150,6 +173,15 @@ class Schliere {
     bool oversampled_feedback;
   };
 
+  // Per-block values for the sample loop.
+  struct Block {
+    float a1, a2, a1_step, a2_step;
+    float tap_cv_step, feedback_cv_step;
+    bool exciting;
+    bool first;
+    uint32_t tap_active;
+  };
+
   void Reset();
   void ComputeCoefficients(float knob_f, float knob_q, float octaves,
                            float* g, float* k) const;
@@ -157,13 +189,21 @@ class Schliere {
   float ChainInput(float in, float cv);
   float ChainInputOversampled(float in, float cv);
   SCHLIERE_RAM_CODE float Excitation();
+  // The sample loop, one instance per chain layout (Layout: see schliere.cc).
+  template<typename Layout>
+  void Run(const SchliereParameters& parameters, const float* in,
+           float* out_l, float* out_r, size_t size, Block* block);
   void UpdateTapDetent();
   bool Broken() const;
 
   Switches switches_;
 
-  float state_[2 * kSchliereStages];
-  float node_[kSchliereStages + 1];
+  // Stage states first: every state of the L chain (784 bytes) stays
+  // within the +-1020 byte offset range of vldr/vstr. Placed behind the
+  // scalars, GCC kept one precomputed address per stage on the stack and
+  // reloaded it in every stage: S 64 instead of 59 % [measured, diag8,
+  // flash log 2026-11-21].
+  float state_[2 * kSchliereStagesL];
   float tap_lp_[kSchliereTaps][2];
 
   // Coefficients, stepped per sample.
@@ -207,9 +247,18 @@ class Schliere {
   int32_t tap_detent_;
   bool primed_;
 
-  // Bit j set: tap j has a non-zero smoothed weight. (At the end of the
-  // class, so the offsets of the members above stay as they were.)
+  // Bit j set: tap j has a non-zero smoothed weight.
   uint32_t tap_active_;
+
+  // Chain selection and the wet gate that fades around a change.
+  SchliereChain chain_;
+  SchliereChain pending_chain_;
+  float gate_;
+  float gate_step_;
+
+  // Chain output of the last sample (the taps' nodes live on the stack in
+  // Run(), they are only needed within one sample).
+  float chain_end_;
 
   DISALLOW_COPY_AND_ASSIGN(Schliere);
 };

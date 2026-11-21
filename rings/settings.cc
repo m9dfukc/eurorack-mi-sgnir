@@ -63,8 +63,7 @@ void Settings::Init() {
   CONSTRAIN(data_.state.model, 0, 5);
   CONSTRAIN(data_.state.schliere, 0, 1);
   CONSTRAIN(data_.state.schliere_dry_steps, 0, 3);
-  data_.state.schliere_options &= \
-      kSchliereOptionNoiseBurst | kSchliereOptionOversampled;
+  data_.state.schliere_options &= kSchliereOptionMask;
   if (data_.state.frequency_locked > 1 ||
       !(data_.state.locked_transpose >= -1.0f &&
         data_.state.locked_transpose <= 61.0f)) {

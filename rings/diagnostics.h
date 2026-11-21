@@ -34,10 +34,10 @@
 // is never overloaded. In every bank the LEDs blink the peak load in percent
 // of the block budget: 1.5 s off, LED 1 red = tens, 1 s off, LED 2 green =
 // ones (a digit 0 = one yellow blink), 2 s status. Status LED 1: bank green
-// = grounded / yellow = bonus models / red = Schliere. Status LED 2: 96 kHz
-// path green = on / yellow = off, red = base load only. In the Schliere
-// bank, left short toggles base load only (instead of dry/wet); the right
-// button works as in the release.
+// = grounded / yellow = bonus models / red = Schliere. Status LED 2: the
+// Schliere variant, green = S 48 kHz / yellow = S 96 kHz / red = L; off =
+// base load only. In the Schliere bank, left short toggles base load only
+// (instead of dry/wet); the right button works as in the release.
 
 #ifndef RINGS_DIAGNOSTICS_H_
 #define RINGS_DIAGNOSTICS_H_

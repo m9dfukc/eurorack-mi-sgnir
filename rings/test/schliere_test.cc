@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "rings/dsp/schliere.h"
+#include "rings/schliere_selection.h"
 
 using namespace rings;
 
@@ -102,11 +103,29 @@ static Out Run(Schliere* s, const SchliereParameters& p, size_t n, Input in) {
 static const size_t T0 = 72;  // time of the impulse
 
 static Out Impulse(SchliereVariant variant, const SchliereParameters& p,
-                   size_t n, double amp) {
+                   size_t n, double amp,
+                   SchliereChain chain = SCHLIERE_CHAIN_S,
+                   bool oversampled = true) {
   static Schliere s;
   s.Init(variant);
+  s.set_chain(chain);
+  if (!oversampled) s.set_oversampled_feedback(false);
   return Run(&s, p, T0 + n, [&](size_t t) { return t == T0 ? amp : 0.0; });
 }
+
+// Tap layouts as specified (independent of the tables in schliere.cc).
+struct Layout {
+  SchliereChain chain;
+  const char* name;
+  int stages;
+  int l[7], r[7];
+};
+static const Layout kLayouts[2] = {
+  { SCHLIERE_CHAIN_S, "S", 61,
+    { 1, 9, 17, 25, 33, 41, 49 }, { 1, 11, 21, 31, 41, 51, 61 } },
+  { SCHLIERE_CHAIN_L, "L", 98,
+    { 1, 14, 27, 40, 53, 66, 79 }, { 1, 17, 33, 49, 66, 82, 98 } },
+};
 
 static cplx Response(const std::vector<float>& y, double f, double amp) {
   cplx acc = 0;
@@ -532,6 +551,206 @@ int main() {
     double burst = Peak(o.l, trigger, trigger + 480);
     double after = Peak(o.l, trigger + 2400);
     check("excite noise burst: audible, then silent after 50 ms (peak, after)", Finite(o) && burst > 0.05 && after < 1e-4, burst, after);
+  }
+
+  // ---- Chain layouts: S and L ----
+  for (const Layout& c : kLayouts) {
+    char name[128];
+    double err = 0, end = 0;
+    for (int d = 1; d <= 7; ++d) {
+      Out o = Impulse(Z, Settings(1000, 0.5, d, 0), 16384, A, c.chain);
+      err = std::fmax(err, std::abs(Response(o.l, 700, A) -
+                                    Reference(700, 1000, 0.51, c.l[d - 1])));
+      err = std::fmax(err, std::abs(Response(o.r, 700, A) -
+                                    Reference(700, 1000, 0.51, c.r[d - 1])));
+      SchliereParameters p = Settings(1000, 0.5, d, 0);
+      p.spread = 1.0f;
+      Out e = Impulse(Z, p, 16384, A, c.chain);
+      end = std::fmax(end, std::abs(Response(e.r, 700, A) -
+                                    Reference(700, 1000, 0.51, c.stages)));
+    }
+    snprintf(name, sizeof(name), "%s: all 7 taps at L and R match the textbook allpass", c.name);
+    check(name, err < 5e-3, err);
+    snprintf(name, sizeof(name), "  %s: R at spread 1 = chain end (%d stages) from every tap", c.name, c.stages);
+    check(name, end < 5e-3, end);
+  }
+  {
+    const Layout& c = kLayouts[1];
+    char name[128];
+    {
+      // Notches between two taps = their distance in stages (Smear manual:
+      // one notch per two poles).
+      static Schliere s;
+      s.Init(Z);
+      s.set_chain(c.chain);
+      Out o = Run(&s, Settings(1000, 0.5, 4.5, 0), T0 + 16384,
+                  [&](size_t t) { return t == T0 ? A : 0.0; });
+      int l = Notches(o.l, A, -25), r = Notches(o.r, A, -25);
+      const int want_l = c.l[4] - c.l[3], want_r = c.r[4] - c.r[3];
+      snprintf(name, sizeof(name), "%s: halfway between taps 4 and 5: %d notches at L", c.name, want_l);
+      check(name, l == want_l, l, want_l);
+      snprintf(name, sizeof(name), "  %s: %d notches at R", c.name, want_r);
+      check(name, r == want_r, r, want_r);
+    }
+    {
+      // Group delay proportional to the poles: 0.50 s for 98 poles at 1 kHz,
+      // Q 16 (Smear manual).
+      SchliereParameters p = Settings(1000, 1, 7, 0);
+      p.spread = 1.0f;
+      Out o = Impulse(Z, p, 6 * 48000, A, c.chain);
+      const double want_l = 0.501 * c.l[6] / 49, want_r = 0.501 * c.stages / 49;
+      const double gd = GroupDelay(o.l, 1000, A), tail = GroupDelay(o.r, 1000, A);
+      snprintf(name, sizeof(name), "%s: group delay at 1 kHz, Q 16: top tap (s)", c.name);
+      check(name, std::fabs(gd - want_l) < 0.01 * want_l, gd, want_l);
+      snprintf(name, sizeof(name), "  %s: chain end (s)", c.name);
+      check(name, std::fabs(tail - want_r) < 0.01 * want_r, tail, want_r);
+    }
+    {
+      // 48 kHz only: the 96 kHz switch has no effect on L.
+      Out a = Impulse(S, Settings(1000, 0.5, 4.5, 0), 16384, A, c.chain, true);
+      Out b = Impulse(Z, Settings(1000, 0.5, 4.5, 0), 16384, A, c.chain);
+      double d = 0;
+      for (size_t i = 0; i < a.l.size(); ++i) {
+        d = std::fmax(d, std::fabs(a.l[i] - b.l[i]));
+        d = std::fmax(d, std::fabs(a.r[i] - b.r[i]));
+      }
+      snprintf(name, sizeof(name), "  %s: 96 kHz path ignored (S with it on = Z)", c.name);
+      check(name, d == 0, d);
+    }
+    {
+      static Schliere s;
+      s.Init(S);
+      s.set_chain(c.chain);
+      Out o = Run(&s, Settings(200, 1, 7, 0.97), 10 * 48000, [](size_t t) {
+        return 0.6 * ((t / 218) % 2 ? 1.0 : -1.0) + 0.3 * Noise();
+      });
+      double m = std::fmax(Peak(o.l), Peak(o.r));
+      snprintf(name, sizeof(name), "%s: hot square + noise, feedback and Q at max: below 0.98", c.name);
+      check(name, Finite(o) && m <= 0.98f, m, 0.98);
+      check("  limiter in the loop reported", s.limiter_active(), s.limiter_active());
+    }
+    {
+      static Schliere s;
+      s.Init(S);
+      s.set_chain(c.chain);
+      Out o = Run(&s, Settings(1000, 0.5, 7, 0.97), 14 * 48000, [](size_t t) {
+        return t < 48000 ? 0.5 * std::sin(2 * PI * 997 * t / FS) : 0.0;
+      });
+      double early = Peak(o.l, 48000, 2 * 48000), late = Peak(o.l, 13 * 48000);
+      snprintf(name, sizeof(name), "%s: feedback at maximum rings out, no self-oscillation (dB)", c.name);
+      check(name, Db(late / early) < -60, Db(late / early), -60);
+    }
+    {
+      static Schliere s;
+      s.Init(S);
+      s.set_chain(c.chain);
+      Out o = Run(&s, Settings(800, 0.8, 4, 0.5), 5 * 48000,
+                  [](size_t) { return 0.5 * Noise(); },
+                  [](SchliereParameters* p, size_t t) {
+                    const double x = 2 * PI * t / FS;
+                    p->octaves = static_cast<float>(3.0 * std::sin(130 * x));
+                    p->tap_cv = static_cast<float>(std::sin(90 * x));
+                    p->feedback_cv = static_cast<float>(std::sin(210 * x));
+                    p->spread = static_cast<float>(0.5 + 0.5 * std::sin(70 * x));
+                    p->resonance = static_cast<float>(0.5 + 0.5 * std::sin(50 * x));
+                  });
+      double m = std::fmax(Peak(o.l), Peak(o.r));
+      snprintf(name, sizeof(name), "%s: all parameters modulated at block rate: finite, bounded", c.name);
+      check(name, Finite(o) && m <= 0.98f, m, 0.98);
+    }
+  }
+
+  // ---- Chain change: fade out, silent restart, fade in ----
+  for (SchliereChain to : { SCHLIERE_CHAIN_L, SCHLIERE_CHAIN_S }) {
+    // S -> L, then the same from L back to S (the instance starts in the
+    // other chain).
+    const SchliereChain from = to == SCHLIERE_CHAIN_L ? SCHLIERE_CHAIN_S : SCHLIERE_CHAIN_L;
+    const char* label = to == SCHLIERE_CHAIN_L ? "S -> L" : "L -> S";
+    char name[128];
+    // 220 Hz sine through tap 7, fully wet. The change is requested before
+    // block B; 10 blocks (5 ms) fade out, the chain restarts at block B + 10,
+    // 10 blocks fade in.
+    const size_t B = 1000, restart = (B + 10) * kBlock, settled = (B + 20) * kBlock;
+    auto sine = [](size_t t) { return 0.3 * std::sin(2 * PI * 220 * t / FS); };
+    SchliereParameters p = Settings(1000, 0.5, 7, 0);
+    static Schliere s;
+    s.Init(S);
+    s.set_oversampled_feedback(false);
+    s.set_chain(from);
+    Out o = Run(&s, p, (B + 200) * kBlock, sine,
+                [&](SchliereParameters*, size_t t) {
+                  if (t == B * kBlock) s.set_chain(to);
+                });
+    // Reference: a fresh instance with the new chain, started at the restart.
+    static Schliere r;
+    r.Init(S);
+    r.set_oversampled_feedback(false);
+    r.set_chain(to);
+    Out q = Run(&r, p, (B + 200) * kBlock - restart,
+                [&](size_t t) { return sine(t + restart); });
+    double steady = 0, around = 0;
+    for (size_t i = 100 * kBlock; i < B * kBlock; ++i) {
+      steady = std::fmax(steady, std::fabs(o.l[i] - o.l[i - 1]));
+    }
+    for (size_t i = B * kBlock; i < settled; ++i) {
+      around = std::fmax(around, std::fabs(o.l[i] - o.l[i - 1]));
+    }
+    snprintf(name, sizeof(name), "%s: no step larger than the steady sine has (max step, steady)", label);
+    check(name, around <= 1.2 * steady, around, steady);
+    snprintf(name, sizeof(name), "  %s: silent at the restart", label);
+    const double silent = std::fmax(std::fabs(o.l[restart - 1]), std::fabs(o.r[restart - 1]));
+    check(name, silent < 1e-6, silent);
+    double d = 0;
+    for (size_t i = settled; i < o.l.size(); ++i) {
+      d = std::fmax(d, std::fabs(o.l[i] - q.l[i - restart]));
+      d = std::fmax(d, std::fabs(o.r[i] - q.r[i - restart]));
+    }
+    snprintf(name, sizeof(name), "  %s: after the fade-in = the new chain started fresh", label);
+    check(name, d < 1e-5 && s.chain() == to, d);
+  }
+  {
+    // Before the first block the chain changes at once (bank entry).
+    Out a = Impulse(Z, Settings(1000, 0.5, 7, 0), 16384, A, SCHLIERE_CHAIN_L);
+    double err = std::abs(Response(a.l, 700, A) - Reference(700, 1000, 0.51, 79));
+    check("chain set before the first block: no fade, L from the start", err < 5e-3 && std::fabs(a.l[T0]) > 0, err);
+  }
+
+  // ---- Right button: variant cycle and saved options ----
+  {
+    SchliereSelection s = SCHLIERE_SELECTION_S_48K;
+    SchliereSelection seq[4];
+    for (int i = 0; i < 4; ++i) {
+      seq[i] = s;
+      s = NextSchliereSelection(s);
+    }
+    check("cycle S 48 kHz -> S 96 kHz -> L -> S 48 kHz",
+          seq[1] == SCHLIERE_SELECTION_S_96K && seq[2] == SCHLIERE_SELECTION_L &&
+          seq[3] == SCHLIERE_SELECTION_S_48K, seq[3]);
+    bool roundtrip = true;
+    for (uint8_t burst = 0; burst <= 1; ++burst) {
+      for (SchliereSelection x : { SCHLIERE_SELECTION_S_48K, SCHLIERE_SELECTION_S_96K,
+                                   SCHLIERE_SELECTION_L }) {
+        uint8_t o = SchliereOptionsWithSelection(burst, x);
+        roundtrip = roundtrip && SchliereSelectionFromOptions(o) == x &&
+            (o & kSchliereOptionNoiseBurst) == burst;
+      }
+    }
+    check("  options keep the excite flavor, every variant reads back", roundtrip, roundtrip);
+    // Options saved by v0.1.0 (bits 1, 2) keep their meaning; v0.1.0 masks
+    // the L bit away and falls back to S at 48 kHz.
+    bool compatible =
+        SchliereSelectionFromOptions(0) == SCHLIERE_SELECTION_S_48K &&
+        SchliereSelectionFromOptions(3) == SCHLIERE_SELECTION_S_96K &&
+        SchliereSelectionFromOptions(kSchliereOptionLong & 3) == SCHLIERE_SELECTION_S_48K;
+    check("  settings of v0.1.0 read as before; rollback turns L into S 48 kHz", compatible, compatible);
+    check("  L plays the L chain, S 96 kHz the S chain",
+          SchliereChainFor(SCHLIERE_SELECTION_L) == SCHLIERE_CHAIN_L &&
+          SchliereChainFor(SCHLIERE_SELECTION_S_96K) == SCHLIERE_CHAIN_S, 0);
+    // Options with both the L and the 96 kHz bit (written by the diag8/diag9
+    // benchmark builds for their second L length) read as L.
+    check("  L bit with the 96 kHz bit reads as L",
+          SchliereSelectionFromOptions(kSchliereOptionLong | kSchliereOptionOversampled) ==
+          SCHLIERE_SELECTION_L, 0);
   }
 
   printf("%s\n", fails ? "FAILURES" : "all cases ok");
