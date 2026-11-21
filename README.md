@@ -198,7 +198,7 @@ stock firmware can still read the settings after a rollback.
 
 ## Planned changes
 
-Developed in the (separate) workbench repo `eurorack-mi-rings`:
+Developed in the (separate) workbench repo `sgnir-workbench`:
 
 1. Schliere: variants O and A on the right button (the switches are implemented), level
    adjustment after measuring Rings' input/output ranges, CPU profiling on hardware.
