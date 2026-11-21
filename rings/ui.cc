@@ -50,6 +50,7 @@ const int32_t kCalibrationPressDuration = 6000;
 // (S 48 kHz -> S 96 kHz -> L).
 const int32_t kSchliereToggleDuration = 1000;
 const uint32_t kSchliereDisplayDuration = 1500;
+const uint32_t kMixBlinkPeriod = 600;  // dry/wet display: 0.3 s on, 0.3 s off
 
 
 // Diagnostics (rings/diagnostics.h): benchmark display timing.
@@ -182,10 +183,11 @@ void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
     }
   }
   
-  // LED 1: excite flavor after a long press of the left button (green /
-  // yellow / red = impulse / mallet / ping), dry/wet step after a short
-  // press (100 / 75 / 50 / 25 % wet = red / yellow / green / off), tap
-  // reaching a detent (green), or the loop limiter at work (red).
+  // LED 1: excite flavor after a short press of the left button (steady
+  // green / yellow / red = impulse / mallet / ping), dry/wet step after a
+  // long press (4 / 3 / 2 / 1 yellow blinks = 100 / 75 / 50 / 25 % wet),
+  // tap reaching a detent (green), or the loop limiter at work (red). The
+  // latest button action clears the other display.
   if (excite_display_time_ &&
       now - excite_display_time_ < kSchliereDisplayDuration) {
     switch (settings_->schliere_excite()) {
@@ -194,14 +196,14 @@ void Ui::UpdateSchliereLeds(bool blink, bool slow_blink) {
       default: leds_.set(0, true, false); break;
     }
   } else if (mix_display_time_ &&
-             now - mix_display_time_ < kSchliereDisplayDuration) {
-    // Wet share: red / yellow / green / off = 100 / 75 / 50 / 25 % wet.
-    switch (settings_->state().schliere_dry_steps) {
-      case 0: leds_.set(0, true, false); break;
-      case 1: leds_.set(0, true, true); break;
-      case 2: leds_.set(0, false, true); break;
-      default: leds_.set(0, false, false); break;
-    }
+             now - mix_display_time_ <
+                 kMixBlinkPeriod * (4 - settings_->state().schliere_dry_steps)) {
+    // Wet share in quarters: 4 / 3 / 2 / 1 yellow blinks = 100 / 75 / 50 /
+    // 25 % wet. Blinking tells it apart from the steady flavor display, which
+    // uses the same colors (user 2026-11-21).
+    bool on = ((now - mix_display_time_) % kMixBlinkPeriod) <
+        kMixBlinkPeriod / 2;
+    leds_.set(0, on, on);
   } else if (detent_display_time_ &&
              now - detent_display_time_ < kSchliereDisplayDuration &&
              shown_tap_detent_ != 0) {
@@ -470,9 +472,12 @@ void Ui::OnSwitchReleased(const Event& e) {
           settings_->ToggleEasterEgg();
           AnimateEasterEggLeds();
         } else if (settings_->state().schliere) {
-          // Excite flavor (polyphony has no meaning in the Schliere bank).
-          settings_->NextSchliereExcite();
-          excite_display_time_ = system_clock.milliseconds() | 1;
+          // Dry/wet step (polyphony has no meaning in the Schliere bank). The
+          // excite flavor is on the short press: changed more often (user
+          // 2026-11-21).
+          settings_->NextSchliereMix();
+          mix_display_time_ = system_clock.milliseconds() | 1;
+          excite_display_time_ = 0;
         } else {
           part_->set_polyphony(3);
           string_synth_->set_polyphony(3);
@@ -501,8 +506,9 @@ void Ui::OnSwitchReleased(const Event& e) {
             }
 #endif  // SCHLIERE_BENCHMARK
             if (settings_->state().schliere) {
-              settings_->NextSchliereMix();
-              mix_display_time_ = system_clock.milliseconds() | 1;
+              settings_->NextSchliereExcite();
+              excite_display_time_ = system_clock.milliseconds() | 1;
+              mix_display_time_ = 0;
               SaveState();
               break;
             }

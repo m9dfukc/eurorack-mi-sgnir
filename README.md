@@ -164,8 +164,8 @@ models → bonus models (LED 2 pulsing) → **Schliere (LED 2 blinking hard)** �
 
 | Button | Function |
 |---|---|
-| Left, short | **Dry/wet**: 100 → 75 → 50 → 25 → 100 % wet (default 100 %). 50 % gives the deepest phaser notches |
-| Left, hold 3 s | **Excite flavor**: impulse → mallet → ping → impulse. *Impulse*: a single sample, bright click followed by the chirp. *Mallet*: a smooth pulse one period of FREQUENCY long, so nearly all of it lands where the chain delays (at and below FREQUENCY): almost no click, mostly chirp. *Ping*: a short sine burst at FREQUENCY, about 2 Q cycles long (3–16 cycles, ≤ 40 ms), a pitched "boing", strongest at high BRIGHTNESS. Every hit varies slightly (level ±1 dB, random polarity, mallet width / ping length ±10 %), so repeated triggers do not sound identical |
+| Left, short | **Excite flavor**: impulse → mallet → ping → impulse. *Impulse*: a single sample, bright click followed by the chirp. *Mallet*: a smooth pulse one period of FREQUENCY long, so nearly all of it lands where the chain delays (at and below FREQUENCY): almost no click, mostly chirp. *Ping*: a short sine burst at FREQUENCY, about 2 Q cycles long (3–16 cycles, ≤ 40 ms), a pitched "boing", strongest at high BRIGHTNESS. Every hit varies slightly (level ±1 dB, random polarity, mallet width / ping length ±10 %), so repeated triggers do not sound identical |
+| Left, hold 3 s | **Dry/wet**: 100 → 75 → 50 → 25 → 100 % wet (default 100 %). 50 % gives the deepest phaser notches |
 | Right, press | **Excite** the moment the button goes down (also when it is then held) |
 | Right, hold 1–3 s | **Variant**, switched on release: S 48 kHz → S 96 kHz → L → S 48 kHz. S 48 kHz is the default; S 96 kHz is the AC/DC variant S (feedback product oversampled), audibly a bit different, ≈ 9 % more CPU. Changing between S and L fades the wet signal out, restarts the chain silent and fades back in (5 ms each way), so ringing tails are cut |
 | Right, hold 3 s | Next bank (no variant change) |
@@ -185,8 +185,8 @@ selected on release.
 
 | LED 1 | Meaning |
 |---|---|
-| green / yellow / red for 1.5 s after holding the left button 3 s | excite flavor: green = impulse, yellow = mallet, red = ping |
-| red / yellow / green / off for 1.5 s after a short press of the left button | dry/wet: 100 / 75 / 50 / 25 % wet |
+| steady green / yellow / red for 1.5 s after a short press of the left button | excite flavor: green = impulse, yellow = mallet, red = ping |
+| 4 / 3 / 2 / 1 yellow blinks after holding the left button 3 s | dry/wet: 100 / 75 / 50 / 25 % wet (count the blinks: one per quarter wet) |
 | green for 1.5 s while turning STRUCTURE | the tap knob reached one of the seven detents (follows the knob only, not the CV) |
 | red, held for 0.3 s | the soft limiter in the feedback loop is working (loud input, high feedback or resonance) — not an error |
 | briefly dark | a trigger arrived at STRUM |
