@@ -1,8 +1,7 @@
 # eurorack-mi-sgnir
 
 A slim, self-contained source tree for building custom firmware for the Mutable Instruments
-**Rings** Eurorack module — plus (work in progress) a custom alternative mode. Named *sgnir*
-because Mutable Instruments asked firmware forks not to reuse the original module names; folder
+**Rings** Eurorack module — plus (work in progress) a custom alternative mode. Folder
 names inside the tree stay as upstream.
 
 This is **not** a GitHub fork of the `pichenettes/eurorack` monorepo: it is a snapshot of only
